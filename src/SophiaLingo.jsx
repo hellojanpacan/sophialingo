@@ -1,0 +1,689 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+
+const API_URL = "https://script.google.com/macros/s/AKfycbwOnch7in0KD4ktQVGZW-XLhyw2Va8DT2sgqhghpRlxrKkruUDYcrhQlYo9kcAnmNI-/exec";
+
+// ─── Fuzzy matching ────────────────────────────────────────
+function normalize(str) {
+  return str
+    .toLowerCase()
+    .replace(/[äÄ]/g, "ae").replace(/[öÖ]/g, "oe").replace(/[üÜ]/g, "ue").replace(/ß/g, "ss")
+    .replace(/[\s,;/()]+/g, " ")
+    .replace(/[^a-z0-9 ]/g, "")
+    .trim();
+}
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) => {
+    const row = new Array(n + 1);
+    row[0] = i;
+    return row;
+  });
+  for (let j = 1; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + (a[i - 1] !== b[j - 1] ? 1 : 0)
+      );
+  return dp[m][n];
+}
+
+function checkAnswer(userInput, correctAnswer) {
+  const normUser = normalize(userInput);
+  const variants = correctAnswer.split(/[,;/]/).map((v) => normalize(v.trim())).filter(Boolean);
+
+  for (const variant of variants) {
+    if (normUser === variant) return "correct";
+    const dist = levenshtein(normUser, variant);
+    const threshold = variant.length <= 4 ? 1 : variant.length <= 8 ? 2 : 3;
+    if (dist <= threshold) return "almost";
+  }
+
+  const normFull = normalize(correctAnswer);
+  if (normFull.includes(normUser) && normUser.length >= 3) return "almost";
+
+  return "incorrect";
+}
+
+// ─── Confetti burst ────────────────────────────────────────
+function Confetti({ count = 40 }) {
+  const colors = ["#E8734A", "#F4A261", "#2A9D8F", "#E9C46A", "#264653", "#E76F51", "#A8DADC"];
+  const pieces = Array.from({ length: count }, (_, i) => {
+    const left = Math.random() * 100;
+    const delay = Math.random() * 0.5;
+    const dur = 1.5 + Math.random() * 1.5;
+    const rot = Math.random() * 720 - 360;
+    const size = 6 + Math.random() * 8;
+    const color = colors[i % colors.length];
+    const shape = Math.random() > 0.5 ? "50%" : "2px";
+    return (
+      <div
+        key={i}
+        style={{
+          position: "absolute",
+          left: `${left}%`,
+          top: "-10px",
+          width: `${size}px`,
+          height: `${size}px`,
+          backgroundColor: color,
+          borderRadius: shape,
+          animation: `confettiFall ${dur}s ease-in ${delay}s forwards`,
+          transform: `rotate(${rot}deg)`,
+          opacity: 0,
+        }}
+      />
+    );
+  });
+  return <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none", zIndex: 999, overflow: "hidden" }}>{pieces}</div>;
+}
+
+// ─── Box badge ─────────────────────────────────────────────
+function BoxBadge({ box }) {
+  const colors = {
+    1: { bg: "#FDEAE4", text: "#C25636" },
+    2: { bg: "#FEF3E2", text: "#B87A2B" },
+    3: { bg: "#E8F5F0", text: "#1E7D60" },
+    4: { bg: "#E3F0FC", text: "#2563A8" },
+    5: { bg: "#EDE9FE", text: "#6D48C4" },
+  };
+  const c = colors[box] || colors[1];
+  return (
+    <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: "12px", fontSize: "12px", fontWeight: 600, backgroundColor: c.bg, color: c.text, letterSpacing: "0.3px" }}>
+      Box {box}
+    </span>
+  );
+}
+
+// ─── Progress dots ─────────────────────────────────────────
+function ProgressDots({ total, current, results }) {
+  return (
+    <div style={{ display: "flex", gap: "6px", justifyContent: "center", margin: "0 0 24px" }}>
+      {Array.from({ length: total }, (_, i) => {
+        const r = results[i];
+        const active = i === current;
+        let bg = "#D4CFC6";
+        if (r === "correct") bg = "#2A9D8F";
+        else if (r === "almost") bg = "#F4A261";
+        else if (r === "incorrect") bg = "#E76F51";
+        return (
+          <div
+            key={i}
+            style={{
+              width: active ? "24px" : "10px",
+              height: "10px",
+              borderRadius: "5px",
+              backgroundColor: active ? "#3D3229" : bg,
+              transition: "all 0.3s ease",
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Main App ──────────────────────────────────────────────
+export default function SophiaLingo() {
+  const [phase, setPhase] = useState("loading");
+  const [words, setWords] = useState([]);
+  const [totalDue, setTotalDue] = useState(0);
+  const [current, setCurrent] = useState(0);
+  const [input, setInput] = useState("");
+  const [feedback, setFeedback] = useState(null);
+  const [results, setResults] = useState([]);
+  const [sessionScore, setSessionScore] = useState({ correct: 0, almost: 0, incorrect: 0 });
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [error, setError] = useState(null);
+  const inputRef = useRef(null);
+
+  // Load words
+  useEffect(() => {
+    fetch(`${API_URL}?action=getWords&limit=10`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) { setError(data.error); setPhase("error"); return; }
+        if (!data.words || data.words.length === 0) { setPhase("empty"); return; }
+        setWords(data.words);
+        setTotalDue(data.total_due);
+        setResults(new Array(data.words.length).fill(null));
+        setPhase("quiz");
+      })
+      .catch((err) => { setError(err.message); setPhase("error"); });
+  }, []);
+
+  // Focus input when new word appears
+  useEffect(() => {
+    if (phase === "quiz" && !feedback && inputRef.current) {
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [current, phase, feedback]);
+
+  const submitAnswer = useCallback(() => {
+    if (!input.trim() || feedback) return;
+    const word = words[current];
+    const result = checkAnswer(input, word.target_word);
+    setFeedback({ result, correctAnswer: word.target_word });
+
+    const newResults = [...results];
+    newResults[current] = result;
+    setResults(newResults);
+
+    setSessionScore((prev) => ({ ...prev, [result]: prev[result] + 1 }));
+
+    // Update word in backend
+    fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "updateWord",
+        word_id: word.word_id,
+        correct: result === "correct" || result === "almost",
+      }),
+    }).catch(() => {});
+  }, [input, feedback, words, current, results]);
+
+  const nextWord = useCallback(() => {
+    if (current + 1 >= words.length) {
+      // Log session
+      const correct = results.filter((r) => r === "correct").length + results.filter((r) => r === "almost").length;
+      fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "logSession", words_tested: words.length, correct }),
+      }).catch(() => {});
+
+      if (correct >= words.length * 0.7) setShowConfetti(true);
+      setPhase("summary");
+    } else {
+      setCurrent((c) => c + 1);
+      setInput("");
+      setFeedback(null);
+    }
+  }, [current, words, results]);
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter") {
+      if (!feedback) submitAnswer();
+      else nextWord();
+    }
+  };
+
+  // ─── Render ────────────────────────────────────────────
+  return (
+    <div style={styles.shell}>
+      <style>{globalCSS}</style>
+
+      {showConfetti && <Confetti />}
+
+      <div style={styles.container}>
+        {/* Header */}
+        <div style={styles.header}>
+          <div style={styles.logo}>SophiaLingo</div>
+          <div style={styles.subtitle}>Spanisch → Deutsch</div>
+        </div>
+
+        {/* Loading */}
+        {phase === "loading" && (
+          <div style={styles.center}>
+            <div style={styles.spinner} />
+            <p style={styles.loadingText}>Wörter werden geladen...</p>
+          </div>
+        )}
+
+        {/* Error */}
+        {phase === "error" && (
+          <div style={styles.center}>
+            <div style={{ fontSize: "48px", marginBottom: "16px" }}>😵</div>
+            <p style={styles.errorText}>Etwas ist schiefgelaufen</p>
+            <p style={{ ...styles.mutedText, maxWidth: "300px" }}>{error}</p>
+            <button style={styles.primaryBtn} onClick={() => window.location.reload()}>Nochmal versuchen</button>
+          </div>
+        )}
+
+        {/* No words due */}
+        {phase === "empty" && (
+          <div style={styles.center}>
+            <div style={{ fontSize: "56px", marginBottom: "16px" }}>🎉</div>
+            <p style={styles.heroText}>Alles erledigt!</p>
+            <p style={styles.mutedText}>Keine Wörter stehen heute zur Wiederholung an. Genieß den Tag!</p>
+          </div>
+        )}
+
+        {/* Quiz */}
+        {phase === "quiz" && words.length > 0 && (
+          <div style={styles.quizWrap}>
+            <ProgressDots total={words.length} current={current} results={results} />
+
+            <div style={styles.counter}>
+              {current + 1} / {words.length}
+              {totalDue > words.length && (
+                <span style={styles.dueExtra}> · {totalDue} insgesamt fällig</span>
+              )}
+            </div>
+
+            {/* Word card */}
+            <div style={styles.card} key={current}>
+              <div style={styles.cardMeta}>
+                <BoxBadge box={words[current].leitner_box} />
+              </div>
+
+              <div style={styles.spanishWord}>{words[current].source_word}</div>
+
+              <div style={styles.inputWrap}>
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Übersetzung eingeben..."
+                  disabled={!!feedback}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
+                  style={{
+                    ...styles.input,
+                    borderColor: feedback
+                      ? feedback.result === "correct" ? "#2A9D8F"
+                        : feedback.result === "almost" ? "#F4A261"
+                        : "#E76F51"
+                      : "#C9C2B8",
+                    backgroundColor: feedback
+                      ? feedback.result === "correct" ? "#F0FAF7"
+                        : feedback.result === "almost" ? "#FFF8EE"
+                        : "#FEF1EE"
+                      : "#FDFCFA",
+                  }}
+                />
+              </div>
+
+              {/* Feedback */}
+              {feedback && (
+                <div style={{ ...styles.feedbackBox, animation: "slideUp 0.3s ease" }}>
+                  {feedback.result === "correct" && (
+                    <>
+                      <div style={styles.feedbackIcon}>✓</div>
+                      <div style={{ ...styles.feedbackLabel, color: "#1E7D60" }}>Richtig!</div>
+                    </>
+                  )}
+                  {feedback.result === "almost" && (
+                    <>
+                      <div style={{ ...styles.feedbackIcon, color: "#B87A2B" }}>≈</div>
+                      <div style={{ ...styles.feedbackLabel, color: "#B87A2B" }}>Fast richtig!</div>
+                      <div style={styles.correctAnswer}>{feedback.correctAnswer}</div>
+                    </>
+                  )}
+                  {feedback.result === "incorrect" && (
+                    <>
+                      <div style={{ ...styles.feedbackIcon, color: "#C25636" }}>✗</div>
+                      <div style={{ ...styles.feedbackLabel, color: "#C25636" }}>Nicht ganz</div>
+                      <div style={styles.correctAnswer}>{feedback.correctAnswer}</div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Buttons */}
+              <div style={styles.btnRow}>
+                {!feedback ? (
+                  <button style={{ ...styles.primaryBtn, opacity: input.trim() ? 1 : 0.5 }} onClick={submitAnswer} disabled={!input.trim()}>
+                    Prüfen
+                  </button>
+                ) : (
+                  <button style={styles.primaryBtn} onClick={nextWord}>
+                    {current + 1 >= words.length ? "Ergebnis anzeigen" : "Weiter →"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Summary */}
+        {phase === "summary" && (
+          <div style={{ ...styles.center, animation: "fadeIn 0.5s ease" }}>
+            <div style={{ fontSize: "56px", marginBottom: "8px" }}>
+              {sessionScore.correct + sessionScore.almost >= words.length * 0.8 ? "🏆"
+                : sessionScore.correct + sessionScore.almost >= words.length * 0.5 ? "💪" : "📚"}
+            </div>
+            <p style={styles.heroText}>Geschafft!</p>
+            <p style={styles.mutedText}>{words.length} Wörter geübt</p>
+
+            <div style={styles.scoreGrid}>
+              <div style={styles.scoreCard}>
+                <div style={{ ...styles.scoreNum, color: "#1E7D60" }}>{sessionScore.correct}</div>
+                <div style={styles.scoreLabel}>Richtig</div>
+              </div>
+              <div style={styles.scoreCard}>
+                <div style={{ ...styles.scoreNum, color: "#B87A2B" }}>{sessionScore.almost}</div>
+                <div style={styles.scoreLabel}>Fast</div>
+              </div>
+              <div style={styles.scoreCard}>
+                <div style={{ ...styles.scoreNum, color: "#C25636" }}>{sessionScore.incorrect}</div>
+                <div style={styles.scoreLabel}>Falsch</div>
+              </div>
+            </div>
+
+            <div style={styles.summaryBar}>
+              {(() => {
+                const total = words.length || 1;
+                const cPct = (sessionScore.correct / total) * 100;
+                const aPct = (sessionScore.almost / total) * 100;
+                const iPct = (sessionScore.incorrect / total) * 100;
+                return (
+                  <>
+                    <div style={{ ...styles.barSegment, width: `${cPct}%`, backgroundColor: "#2A9D8F" }} />
+                    <div style={{ ...styles.barSegment, width: `${aPct}%`, backgroundColor: "#F4A261" }} />
+                    <div style={{ ...styles.barSegment, width: `${iPct}%`, backgroundColor: "#E76F51" }} />
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Word-by-word review */}
+            <div style={styles.reviewList}>
+              {words.map((w, i) => (
+                <div key={i} style={styles.reviewRow}>
+                  <div style={{
+                    ...styles.reviewDot,
+                    backgroundColor: results[i] === "correct" ? "#2A9D8F" : results[i] === "almost" ? "#F4A261" : "#E76F51",
+                  }} />
+                  <div style={styles.reviewWord}>{w.source_word}</div>
+                  <div style={styles.reviewArrow}>→</div>
+                  <div style={styles.reviewAnswer}>{w.target_word}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ marginTop: "24px" }}>
+              <p style={{ ...styles.mutedText, fontSize: "13px" }}>
+                {totalDue > words.length
+                  ? `Noch ${totalDue - words.length} Wörter fällig — nochmal starten?`
+                  : "Morgen geht's weiter. ¡Hasta mañana!"
+                }
+              </p>
+              {totalDue > words.length && (
+                <button style={{ ...styles.primaryBtn, marginTop: "12px" }} onClick={() => window.location.reload()}>
+                  Nächste Runde
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div style={styles.footer}>
+          SophiaLingo · Leitner-Box Spaced Repetition
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Styles ──────────────────────────────────────────────
+const styles = {
+  shell: {
+    minHeight: "100vh",
+    background: "linear-gradient(168deg, #F5F0E8 0%, #EDE6DA 40%, #E8DFD0 100%)",
+    fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
+    color: "#3D3229",
+    padding: "0",
+  },
+  container: {
+    maxWidth: "440px",
+    margin: "0 auto",
+    padding: "24px 20px 40px",
+    minHeight: "100vh",
+    display: "flex",
+    flexDirection: "column",
+  },
+  header: {
+    textAlign: "center",
+    marginBottom: "32px",
+    paddingTop: "12px",
+  },
+  logo: {
+    fontSize: "28px",
+    fontWeight: 700,
+    letterSpacing: "-0.5px",
+    color: "#3D3229",
+    marginBottom: "4px",
+  },
+  subtitle: {
+    fontSize: "13px",
+    color: "#8A7F72",
+    letterSpacing: "1.5px",
+    textTransform: "uppercase",
+    fontWeight: 500,
+  },
+  center: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    textAlign: "center",
+  },
+  spinner: {
+    width: "32px",
+    height: "32px",
+    border: "3px solid #D4CFC6",
+    borderTop: "3px solid #E8734A",
+    borderRadius: "50%",
+    animation: "spin 0.8s linear infinite",
+    marginBottom: "16px",
+  },
+  loadingText: {
+    color: "#8A7F72",
+    fontSize: "15px",
+  },
+  errorText: {
+    fontSize: "20px",
+    fontWeight: 600,
+    marginBottom: "8px",
+  },
+  heroText: {
+    fontSize: "26px",
+    fontWeight: 700,
+    marginBottom: "8px",
+    letterSpacing: "-0.3px",
+  },
+  mutedText: {
+    color: "#8A7F72",
+    fontSize: "15px",
+    lineHeight: 1.5,
+  },
+  quizWrap: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+  },
+  counter: {
+    textAlign: "center",
+    fontSize: "13px",
+    color: "#8A7F72",
+    marginBottom: "16px",
+    fontWeight: 500,
+  },
+  dueExtra: {
+    color: "#B0A89C",
+  },
+  card: {
+    backgroundColor: "#FDFCFA",
+    borderRadius: "16px",
+    padding: "28px 24px",
+    boxShadow: "0 1px 3px rgba(61,50,41,0.06), 0 8px 24px rgba(61,50,41,0.04)",
+    border: "1px solid rgba(61,50,41,0.06)",
+    animation: "slideUp 0.35s ease",
+  },
+  cardMeta: {
+    marginBottom: "20px",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  spanishWord: {
+    fontSize: "28px",
+    fontWeight: 700,
+    textAlign: "center",
+    marginBottom: "28px",
+    letterSpacing: "-0.3px",
+    lineHeight: 1.3,
+    color: "#2C2218",
+  },
+  inputWrap: {
+    marginBottom: "16px",
+  },
+  input: {
+    width: "100%",
+    padding: "14px 16px",
+    fontSize: "17px",
+    border: "2px solid #C9C2B8",
+    borderRadius: "10px",
+    outline: "none",
+    fontFamily: "'DM Sans', sans-serif",
+    color: "#3D3229",
+    transition: "border-color 0.2s, background-color 0.2s",
+    boxSizing: "border-box",
+  },
+  feedbackBox: {
+    textAlign: "center",
+    padding: "16px 0 8px",
+  },
+  feedbackIcon: {
+    fontSize: "32px",
+    fontWeight: 700,
+    color: "#1E7D60",
+    marginBottom: "4px",
+  },
+  feedbackLabel: {
+    fontSize: "16px",
+    fontWeight: 600,
+    marginBottom: "4px",
+  },
+  correctAnswer: {
+    fontSize: "15px",
+    color: "#6B5F52",
+    fontStyle: "italic",
+    marginTop: "4px",
+  },
+  btnRow: {
+    display: "flex",
+    justifyContent: "center",
+    marginTop: "16px",
+  },
+  primaryBtn: {
+    padding: "12px 36px",
+    fontSize: "15px",
+    fontWeight: 600,
+    color: "#FDFCFA",
+    backgroundColor: "#E8734A",
+    border: "none",
+    borderRadius: "10px",
+    cursor: "pointer",
+    fontFamily: "'DM Sans', sans-serif",
+    transition: "transform 0.15s, box-shadow 0.15s",
+    boxShadow: "0 2px 8px rgba(232,115,74,0.25)",
+  },
+  scoreGrid: {
+    display: "flex",
+    gap: "16px",
+    margin: "24px 0 16px",
+  },
+  scoreCard: {
+    flex: 1,
+    backgroundColor: "#FDFCFA",
+    borderRadius: "12px",
+    padding: "16px 12px",
+    textAlign: "center",
+    boxShadow: "0 1px 3px rgba(61,50,41,0.06)",
+    border: "1px solid rgba(61,50,41,0.06)",
+  },
+  scoreNum: {
+    fontSize: "28px",
+    fontWeight: 700,
+    lineHeight: 1,
+    marginBottom: "4px",
+  },
+  scoreLabel: {
+    fontSize: "12px",
+    color: "#8A7F72",
+    fontWeight: 500,
+    textTransform: "uppercase",
+    letterSpacing: "0.5px",
+  },
+  summaryBar: {
+    display: "flex",
+    height: "8px",
+    borderRadius: "4px",
+    overflow: "hidden",
+    backgroundColor: "#E8E3DA",
+    width: "100%",
+    maxWidth: "320px",
+    margin: "0 auto 24px",
+  },
+  barSegment: {
+    height: "100%",
+    transition: "width 0.5s ease",
+  },
+  reviewList: {
+    width: "100%",
+    maxWidth: "360px",
+    textAlign: "left",
+  },
+  reviewRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    padding: "8px 0",
+    borderBottom: "1px solid rgba(61,50,41,0.06)",
+    fontSize: "14px",
+  },
+  reviewDot: {
+    width: "8px",
+    height: "8px",
+    borderRadius: "4px",
+    flexShrink: 0,
+  },
+  reviewWord: {
+    fontWeight: 600,
+    flex: 1,
+    color: "#3D3229",
+  },
+  reviewArrow: {
+    color: "#B0A89C",
+    flexShrink: 0,
+  },
+  reviewAnswer: {
+    flex: 1,
+    color: "#6B5F52",
+    textAlign: "right",
+  },
+  footer: {
+    textAlign: "center",
+    fontSize: "11px",
+    color: "#B0A89C",
+    marginTop: "auto",
+    paddingTop: "32px",
+    letterSpacing: "0.3px",
+  },
+};
+
+const globalCSS = `
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { -webkit-font-smoothing: antialiased; }
+  input:focus { border-color: #E8734A !important; box-shadow: 0 0 0 3px rgba(232,115,74,0.12); }
+  button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(232,115,74,0.3) !important; }
+  button:active { transform: translateY(0); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes confettiFall {
+    0% { opacity: 1; transform: translateY(0) rotate(0deg); }
+    100% { opacity: 0; transform: translateY(100vh) rotate(720deg); }
+  }
+`;
