@@ -175,7 +175,7 @@ export default function SophiaLingo() {
     // Update word in backend
     fetch(API_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "text/plain" },
       body: JSON.stringify({
         action: "updateWord",
         word_id: word.word_id,
@@ -190,7 +190,7 @@ export default function SophiaLingo() {
       const correct = results.filter((r) => r === "correct").length + results.filter((r) => r === "almost").length;
       fetch(API_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "text/plain" },
         body: JSON.stringify({ action: "logSession", words_tested: words.length, correct }),
       }).catch(() => {});
 
