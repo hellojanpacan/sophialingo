@@ -137,6 +137,8 @@ export default function SophiaLingo() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [error, setError] = useState(null);
   const inputRef = useRef(null);
+  const [editing, setEditing] = useState(null);   // null | "source" | "target"
+  const [editValue, setEditValue] = useState("");
 
   // Load words
   useEffect(() => {
@@ -185,6 +187,7 @@ export default function SophiaLingo() {
   }, [input, feedback, words, current, results]);
 
   const nextWord = useCallback(() => {
+    setEditing(null);
     if (current + 1 >= words.length) {
       // Log session
       const correct = results.filter((r) => r === "correct").length + results.filter((r) => r === "almost").length;
@@ -208,6 +211,32 @@ export default function SophiaLingo() {
       if (!feedback) submitAnswer();
       else nextWord();
     }
+  };
+
+  const handleEditSave = (field) => {
+    const word = words[current];
+    const trimmed = editValue.trim();
+    if (!trimmed) { setEditing(null); return; }
+
+    fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({
+        action: "editWord",
+        word_id: word.word_id,
+        [field === "source" ? "source_word" : "target_word"]: trimmed,
+      }),
+    }).catch(() => {});
+
+    const newWords = [...words];
+    if (field === "source") {
+      newWords[current] = { ...newWords[current], source_word: trimmed };
+    } else {
+      newWords[current] = { ...newWords[current], target_word: trimmed };
+      setFeedback((prev) => prev ? { ...prev, correctAnswer: trimmed } : prev);
+    }
+    setWords(newWords);
+    setEditing(null);
   };
 
   // ─── Render ────────────────────────────────────────────
@@ -269,7 +298,28 @@ export default function SophiaLingo() {
                 <BoxBadge box={words[current].leitner_box} />
               </div>
 
-              <div style={styles.spanishWord}>{words[current].source_word}</div>
+              <div style={{ ...styles.spanishWord, display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
+                {feedback && editing === "source" ? (
+                  <input
+                    autoFocus
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleEditSave("source");
+                      if (e.key === "Escape") setEditing(null);
+                    }}
+                    style={{ ...styles.input, fontSize: "22px", fontWeight: 700, textAlign: "center", width: "auto", minWidth: "120px", padding: "4px 10px", marginBottom: 0 }}
+                  />
+                ) : (
+                  <span>{words[current].source_word}</span>
+                )}
+                {feedback && editing !== "source" && (
+                  <button style={styles.editBtn} onClick={() => { setEditValue(words[current].source_word); setEditing("source"); }} title="Wort bearbeiten">✏</button>
+                )}
+                {feedback && editing === "source" && (
+                  <button style={styles.editBtn} onClick={() => handleEditSave("source")} title="Speichern">💾</button>
+                )}
+              </div>
 
               <div style={styles.inputWrap}>
                 <input
@@ -313,16 +363,36 @@ export default function SophiaLingo() {
                     <>
                       <div style={{ ...styles.feedbackIcon, color: "#B87A2B" }}>≈</div>
                       <div style={{ ...styles.feedbackLabel, color: "#B87A2B" }}>Fast richtig!</div>
-                      <div style={styles.correctAnswer}>{feedback.correctAnswer}</div>
                     </>
                   )}
                   {feedback.result === "incorrect" && (
                     <>
                       <div style={{ ...styles.feedbackIcon, color: "#C25636" }}>✗</div>
                       <div style={{ ...styles.feedbackLabel, color: "#C25636" }}>Nicht ganz</div>
-                      <div style={styles.correctAnswer}>{feedback.correctAnswer}</div>
                     </>
                   )}
+                  <div style={{ ...styles.correctAnswer, display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                    {editing === "target" ? (
+                      <input
+                        autoFocus
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleEditSave("target");
+                          if (e.key === "Escape") setEditing(null);
+                        }}
+                        style={{ ...styles.input, fontSize: "14px", fontStyle: "italic", textAlign: "center", width: "auto", minWidth: "100px", padding: "2px 8px", marginBottom: 0 }}
+                      />
+                    ) : (
+                      <span>{feedback.correctAnswer}</span>
+                    )}
+                    {editing !== "target" && (
+                      <button style={styles.editBtn} onClick={() => { setEditValue(feedback.correctAnswer); setEditing("target"); }} title="Antwort bearbeiten">✏</button>
+                    )}
+                    {editing === "target" && (
+                      <button style={styles.editBtn} onClick={() => handleEditSave("target")} title="Speichern">💾</button>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -425,6 +495,16 @@ export default function SophiaLingo() {
 
 // ─── Styles ──────────────────────────────────────────────
 const styles = {
+  editBtn: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "14px",
+    padding: "0 4px",
+    lineHeight: 1,
+    opacity: 0.45,
+    verticalAlign: "middle",
+  },
   shell: {
     minHeight: "100vh",
     background: "linear-gradient(168deg, #F5F0E8 0%, #EDE6DA 40%, #E8DFD0 100%)",
