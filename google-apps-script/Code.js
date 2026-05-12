@@ -58,8 +58,11 @@ function doPost(e) {
     case 'editword':
       result = editWord(body);
       break;
+    case 'evalsentence':
+      result = evalSentence(body);
+      break;
     default:
-      result = { error: 'Unknown action. Use: updateWord, addWords, logSession, editWord' };
+      result = { error: 'Unknown action. Use: updateWord, addWords, logSession, editWord, evalSentence' };
   }
 
   return jsonResponse(result);
@@ -373,6 +376,42 @@ function editWord(body) {
       ...(hasTarget ? { target_word: body.target_word.trim() } : {}),
     },
   };
+}
+
+// ============================================================
+// evalSentence — save user thumbs-up / thumbs-down on a sentence
+// ============================================================
+// POST { action: "evalSentence", word_id: "w_001", eval: "up" | "down" | "" }
+
+function evalSentence(body) {
+  const wordId = body.word_id;
+  if (!wordId) return { error: 'word_id is required' };
+
+  const evalValue = typeof body.eval === 'string' ? body.eval.trim() : '';
+  if (!['up', 'down', ''].includes(evalValue)) {
+    return { error: 'eval must be "up", "down", or ""' };
+  }
+
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName('SophiaLingo Database');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+
+  const cols = {};
+  headers.forEach((h, idx) => { cols[h] = idx; });
+
+  if (cols['sentence_eval'] === undefined) {
+    return { error: 'sentence_eval column not found in sheet' };
+  }
+
+  let rowIndex = -1;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][cols['word_id']] === wordId) { rowIndex = i; break; }
+  }
+  if (rowIndex === -1) return { error: 'Word not found: ' + wordId };
+
+  sheet.getRange(rowIndex + 1, cols['sentence_eval'] + 1).setValue(evalValue);
+
+  return { word_id: wordId, sentence_eval: evalValue };
 }
 
 // ============================================================

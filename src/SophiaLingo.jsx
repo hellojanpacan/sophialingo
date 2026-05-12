@@ -242,6 +242,26 @@ export default function SophiaLingo() {
     setEditing(null);
   };
 
+  const handleSentenceEval = (e, value) => {
+    e.stopPropagation();
+    const word = words[current];
+    const newEval = word.sentence_eval === value ? "" : value;
+
+    const newWords = [...words];
+    newWords[current] = { ...newWords[current], sentence_eval: newEval };
+    setWords(newWords);
+
+    fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({
+        action: "evalSentence",
+        word_id: word.word_id,
+        eval: newEval,
+      }),
+    }).catch(() => {});
+  };
+
   // ─── Render ────────────────────────────────────────────
   return (
     <div style={styles.shell}>
@@ -314,6 +334,28 @@ export default function SophiaLingo() {
                     </span>
                   ))}
                 </p>
+                <div style={styles.sentenceEvalRow}>
+                  <button
+                    style={{
+                      ...(words[current].sentence_eval === "up" ? styles.thumbBtnActive : styles.thumbBtn),
+                      ...(words[current].sentence_eval === "up" ? { transform: "scale(1.15)" } : {}),
+                    }}
+                    onClick={(e) => handleSentenceEval(e, "up")}
+                    title="Guter Satz"
+                  >
+                    👍
+                  </button>
+                  <button
+                    style={{
+                      ...(words[current].sentence_eval === "down" ? styles.thumbBtnActive : styles.thumbBtn),
+                      ...(words[current].sentence_eval === "down" ? { transform: "scale(1.15)" } : {}),
+                    }}
+                    onClick={(e) => handleSentenceEval(e, "down")}
+                    title="Schlechter Satz"
+                  >
+                    👎
+                  </button>
+                </div>
                 <span style={styles.sentenceTapHint}>Tippe um fortzufahren</span>
               </div>
             )}
@@ -549,6 +591,33 @@ const styles = {
     letterSpacing: "0.5px",
     textTransform: "uppercase",
     fontWeight: 500,
+  },
+  sentenceEvalRow: {
+    display: "flex",
+    gap: "16px",
+    marginBottom: "20px",
+  },
+  thumbBtn: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "22px",
+    padding: "4px 8px",
+    borderRadius: "8px",
+    lineHeight: 1,
+    opacity: 0.3,
+    transition: "opacity 0.15s, transform 0.1s",
+  },
+  thumbBtnActive: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "22px",
+    padding: "4px 8px",
+    borderRadius: "8px",
+    lineHeight: 1,
+    opacity: 1,
+    transition: "opacity 0.15s, transform 0.1s",
   },
   editBtn: {
     background: "none",
