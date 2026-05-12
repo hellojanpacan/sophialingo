@@ -168,7 +168,6 @@ export default function SophiaLingo() {
     const word = words[current];
     const result = checkAnswer(input, word.target_word);
     setFeedback({ result, correctAnswer: word.target_word });
-    if (word.example_sentence) setShowSentence(true);
 
     const newResults = [...results];
     newResults[current] = result;
@@ -190,6 +189,10 @@ export default function SophiaLingo() {
 
   const nextWord = useCallback(() => {
     setEditing(null);
+    if (!showSentence && words[current]?.example_sentence) {
+      setShowSentence(true);
+      return;
+    }
     setShowSentence(false);
     if (current + 1 >= words.length) {
       // Log session
@@ -207,7 +210,7 @@ export default function SophiaLingo() {
       setInput("");
       setFeedback(null);
     }
-  }, [current, words, results]);
+  }, [current, words, results, showSentence]);
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
@@ -317,7 +320,7 @@ export default function SophiaLingo() {
 
             {/* Sentence reveal */}
             {showSentence && (
-              <div style={styles.sentenceScreen} onClick={() => setShowSentence(false)}>
+              <div style={styles.sentenceScreen} onClick={nextWord}>
                 <p style={styles.sentenceText}>
                   {words[current].example_sentence.split(" ").map((word, i) => (
                     <span
