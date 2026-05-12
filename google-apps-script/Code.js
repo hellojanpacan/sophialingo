@@ -267,6 +267,7 @@ function addWords(body) {
       0,            // times_wrong
       today,        // date_added
       addSource,    // source
+      w.example_sentence ? w.example_sentence.trim() : '',
     ];
     rowsToAdd.push(row);
     addedWords.push({ word_id: wordId, source_word: w.source_word, target_word: w.target_word });
