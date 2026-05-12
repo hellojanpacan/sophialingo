@@ -139,6 +139,7 @@ export default function SophiaLingo() {
   const inputRef = useRef(null);
   const [editing, setEditing] = useState(null);   // null | "source" | "target"
   const [editValue, setEditValue] = useState("");
+  const [showSentence, setShowSentence] = useState(false);
 
   // Load words
   useEffect(() => {
@@ -167,6 +168,7 @@ export default function SophiaLingo() {
     const word = words[current];
     const result = checkAnswer(input, word.target_word);
     setFeedback({ result, correctAnswer: word.target_word });
+    if (word.example_sentence) setShowSentence(true);
 
     const newResults = [...results];
     newResults[current] = result;
@@ -188,6 +190,7 @@ export default function SophiaLingo() {
 
   const nextWord = useCallback(() => {
     setEditing(null);
+    setShowSentence(false);
     if (current + 1 >= words.length) {
       // Log session
       const correct = results.filter((r) => r === "correct").length + results.filter((r) => r === "almost").length;
@@ -292,8 +295,31 @@ export default function SophiaLingo() {
               )}
             </div>
 
+            {/* Sentence reveal */}
+            {showSentence && (
+              <div style={styles.sentenceScreen} onClick={() => setShowSentence(false)}>
+                <p style={styles.sentenceText}>
+                  {words[current].example_sentence.split(" ").map((word, i) => (
+                    <span
+                      key={i}
+                      style={{
+                        display: "inline-block",
+                        opacity: 0,
+                        animation: "wordIn 0.35s ease forwards",
+                        animationDelay: `${i * 0.1}s`,
+                        marginRight: "0.25em",
+                      }}
+                    >
+                      {word}
+                    </span>
+                  ))}
+                </p>
+                <span style={styles.sentenceTapHint}>Tippe um fortzufahren</span>
+              </div>
+            )}
+
             {/* Word card */}
-            <div style={styles.card} key={current}>
+            {!showSentence && <div style={styles.card} key={current}>
               <div style={styles.cardMeta}>
                 <BoxBadge box={words[current].leitner_box} />
               </div>
@@ -408,7 +434,7 @@ export default function SophiaLingo() {
                   </button>
                 )}
               </div>
-            </div>
+            </div>}
           </div>
         )}
 
@@ -495,6 +521,35 @@ export default function SophiaLingo() {
 
 // ─── Styles ──────────────────────────────────────────────
 const styles = {
+  sentenceScreen: {
+    backgroundColor: "#FDFCFA",
+    borderRadius: "20px",
+    boxShadow: "0 2px 16px rgba(61,50,41,0.08)",
+    padding: "48px 32px 36px",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: "260px",
+    cursor: "pointer",
+    userSelect: "none",
+  },
+  sentenceText: {
+    fontSize: "22px",
+    lineHeight: 1.55,
+    color: "#3D3229",
+    textAlign: "center",
+    fontWeight: 400,
+    fontStyle: "italic",
+    marginBottom: "32px",
+  },
+  sentenceTapHint: {
+    fontSize: "12px",
+    color: "#B5ADA4",
+    letterSpacing: "0.5px",
+    textTransform: "uppercase",
+    fontWeight: 500,
+  },
   editBtn: {
     background: "none",
     border: "none",
@@ -762,6 +817,7 @@ const globalCSS = `
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes wordIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes confettiFall {
     0% { opacity: 1; transform: translateY(0) rotate(0deg); }
     100% { opacity: 0; transform: translateY(100vh) rotate(720deg); }
