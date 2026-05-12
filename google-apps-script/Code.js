@@ -55,8 +55,11 @@ function doPost(e) {
     case 'logsession':
       result = logSession(body);
       break;
+    case 'editword':
+      result = editWord(body);
+      break;
     default:
-      result = { error: 'Unknown action. Use: updateWord, addWords, logSession' };
+      result = { error: 'Unknown action. Use: updateWord, addWords, logSession, editWord' };
   }
 
   return jsonResponse(result);
@@ -325,6 +328,49 @@ function logSession(body) {
     words_tested: wordsTested,
     correct: correct,
     score_pct: scorePct,
+  };
+}
+
+// ============================================================
+// editWord — correct source_word or target_word in the sheet
+// ============================================================
+// POST { action: "editWord", word_id: "w_001",
+//        source_word: "..." | target_word: "..." }
+
+function editWord(body) {
+  const wordId = body.word_id;
+  if (!wordId) return { error: 'word_id is required' };
+
+  const hasSource = typeof body.source_word === 'string' && body.source_word.trim() !== '';
+  const hasTarget = typeof body.target_word === 'string' && body.target_word.trim() !== '';
+  if (!hasSource && !hasTarget) return { error: 'source_word or target_word is required' };
+
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName('SophiaLingo Database');
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+
+  const cols = {};
+  headers.forEach((h, idx) => { cols[h] = idx; });
+
+  let rowIndex = -1;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][cols['word_id']] === wordId) { rowIndex = i; break; }
+  }
+  if (rowIndex === -1) return { error: 'Word not found: ' + wordId };
+
+  if (hasSource) {
+    sheet.getRange(rowIndex + 1, cols['source_word'] + 1).setValue(body.source_word.trim());
+  }
+  if (hasTarget) {
+    sheet.getRange(rowIndex + 1, cols['target_word'] + 1).setValue(body.target_word.trim());
+  }
+
+  return {
+    word_id: wordId,
+    updated: {
+      ...(hasSource ? { source_word: body.source_word.trim() } : {}),
+      ...(hasTarget ? { target_word: body.target_word.trim() } : {}),
+    },
   };
 }
 
