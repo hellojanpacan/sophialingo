@@ -20,24 +20,28 @@ const LEITNER_INTERVALS = {
 // ============================================================
 
 function doGet(e) {
-  const action = (e.parameter.action || '').toLowerCase();
-  let result;
+  try {
+    const action = (e.parameter.action || '').toLowerCase();
+    let result;
 
-  switch (action) {
-    case 'getwords':
-      result = getWords(e.parameter);
-      break;
-    case 'getstats':
-      result = getStats();
-      break;
-    case 'ping':
-      result = { ok: true, timestamp: new Date().toISOString() };
-      break;
-    default:
-      result = { error: 'Unknown action. Use: getWords, getStats, ping' };
+    switch (action) {
+      case 'getwords':
+        result = getWords(e.parameter);
+        break;
+      case 'getstats':
+        result = getStats();
+        break;
+      case 'ping':
+        result = { ok: true, timestamp: new Date().toISOString() };
+        break;
+      default:
+        result = { error: 'Unknown action. Use: getWords, getStats, ping' };
+    }
+
+    return jsonResponse(result);
+  } catch (err) {
+    return jsonResponse({ error: err.message, stack: err.stack });
   }
-
-  return jsonResponse(result);
 }
 
 function doPost(e) {
@@ -82,8 +86,9 @@ function jsonResponse(data) {
 // getWords — fetch due words for today's quiz
 // ============================================================
 // GET ?action=getWords&limit=10
-// Returns words where next_review <= today, sorted by
-// leitner_box ASC (hardest first), limited to `limit`.
+// Group A (active due): last_reviewed != '' AND next_review <= today, sorted next_review ASC then last_reviewed ASC.
+// Group B (new): last_reviewed == '' (never reviewed), appended in sheet row order.
+// Limited to `limit`.
 
 function getWords(params) {
   const limit = parseInt(params.limit) || 10;
@@ -113,17 +118,39 @@ function getWords(params) {
       nextReviewStr = '1970-01-01';
     }
 
-    if (nextReviewStr <= todayStr) {
+    // Parse last_reviewed as a comparable string (timezone-safe); blank = never reviewed
+    let lastReviewedStr;
+    if (row.last_reviewed instanceof Date) {
+      lastReviewedStr = Utilities.formatDate(row.last_reviewed, tz, 'yyyy-MM-dd');
+    } else if (row.last_reviewed) {
+      lastReviewedStr = String(row.last_reviewed).substring(0, 10);
+    } else {
+      lastReviewedStr = '';
+    }
+
+    const isNew = !lastReviewedStr;          // never reviewed — eligible as filler
+    const isActiveDue = !isNew && nextReviewStr <= todayStr;
+
+    if (isActiveDue || isNew) {
       row._rowIndex = i + 1;
       row.leitner_box = parseInt(row.leitner_box) || 1;
+      row.nextReviewStr = nextReviewStr;
+      row.lastReviewedStr = lastReviewedStr;
       words.push(row);
     }
   }
 
-  // Sort by leitner_box ascending (box 1 = least known, show first)
-  words.sort((a, b) => a.leitner_box - b.leitner_box);
+  // Active due words first (most overdue → oldest reviewed), new words last in sheet row order
+  words.sort((a, b) => {
+    const aNew = !a.lastReviewedStr;
+    const bNew = !b.lastReviewedStr;
+    if (aNew !== bNew) return aNew ? 1 : -1;
+    if (aNew && bNew) return 0;
+    if (a.nextReviewStr !== b.nextReviewStr)
+      return a.nextReviewStr.localeCompare(b.nextReviewStr);
+    return a.lastReviewedStr.localeCompare(b.lastReviewedStr);
+  });
 
-  // Limit
   const selected = words.slice(0, limit);
 
   return {
