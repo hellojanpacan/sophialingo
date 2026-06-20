@@ -2,6 +2,51 @@ import { useState, useEffect, useRef, useCallback } from "react";
 
 const API_URL = "https://script.google.com/macros/s/AKfycbwOnch7in0KD4ktQVGZW-XLhyw2Va8DT2sgqhghpRlxrKkruUDYcrhQlYo9kcAnmNI-/exec";
 
+// ─── Offline POST queue ────────────────────────────────────
+const QUEUE_KEY = "sl_queue";
+
+function readQueue() {
+  try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]"); } catch { return []; }
+}
+
+function writeQueue(q) {
+  localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
+}
+
+async function drainQueue() {
+  const q = readQueue();
+  if (!q.length) return;
+  const failed = [];
+  for (const payload of q) {
+    try {
+      const res = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      failed.push(payload);
+    }
+  }
+  writeQueue(failed);
+}
+
+async function postOrQueue(payload) {
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error();
+  } catch {
+    const q = readQueue();
+    q.push(payload);
+    writeQueue(q);
+  }
+}
+
 // ─── Fuzzy matching ────────────────────────────────────────
 function normalize(str) {
   return str
@@ -141,6 +186,13 @@ export default function SophiaLingo() {
   const [editValue, setEditValue] = useState("");
   const [showSentence, setShowSentence] = useState(false);
 
+  // Drain offline queue on load and when connection returns
+  useEffect(() => {
+    drainQueue();
+    window.addEventListener("online", drainQueue);
+    return () => window.removeEventListener("online", drainQueue);
+  }, []);
+
   // Load words
   useEffect(() => {
     fetch(`${API_URL}?action=getWords&limit=10`)
@@ -176,15 +228,11 @@ export default function SophiaLingo() {
     setSessionScore((prev) => ({ ...prev, [result]: prev[result] + 1 }));
 
     // Update word in backend
-    fetch(API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify({
-        action: "updateWord",
-        word_id: word.word_id,
-        correct: result === "correct" || result === "almost",
-      }),
-    }).catch(() => {});
+    postOrQueue({
+      action: "updateWord",
+      word_id: word.word_id,
+      correct: result === "correct" || result === "almost",
+    });
   }, [input, feedback, words, current, results]);
 
   const nextWord = useCallback(() => {
@@ -197,11 +245,7 @@ export default function SophiaLingo() {
     if (current + 1 >= words.length) {
       // Log session
       const correct = results.filter((r) => r === "correct").length + results.filter((r) => r === "almost").length;
-      fetch(API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ action: "logSession", words_tested: words.length, correct }),
-      }).catch(() => {});
+      postOrQueue({ action: "logSession", words_tested: words.length, correct });
 
       if (correct >= words.length * 0.7) setShowConfetti(true);
       setPhase("summary");
@@ -224,15 +268,11 @@ export default function SophiaLingo() {
     const trimmed = editValue.trim();
     if (!trimmed) { setEditing(null); return; }
 
-    fetch(API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify({
-        action: "editWord",
-        word_id: word.word_id,
-        [field === "source" ? "source_word" : "target_word"]: trimmed,
-      }),
-    }).catch(() => {});
+    postOrQueue({
+      action: "editWord",
+      word_id: word.word_id,
+      [field === "source" ? "source_word" : "target_word"]: trimmed,
+    });
 
     const newWords = [...words];
     if (field === "source") {
@@ -254,15 +294,11 @@ export default function SophiaLingo() {
     newWords[current] = { ...newWords[current], sentence_eval: newEval };
     setWords(newWords);
 
-    fetch(API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify({
-        action: "evalSentence",
-        word_id: word.word_id,
-        eval: newEval,
-      }),
-    }).catch(() => {});
+    postOrQueue({
+      action: "evalSentence",
+      word_id: word.word_id,
+      eval: newEval,
+    });
   };
 
   // ─── Render ────────────────────────────────────────────
