@@ -31,11 +31,14 @@ function doGet(e) {
       case 'getstats':
         result = getStats();
         break;
+      case 'getstreak':
+        result = getStreak();
+        break;
       case 'ping':
         result = { ok: true, timestamp: new Date().toISOString() };
         break;
       default:
-        result = { error: 'Unknown action. Use: getWords, getStats, ping' };
+        result = { error: 'Unknown action. Use: getWords, getStats, getStreak, ping' };
     }
 
     return jsonResponse(result);
@@ -514,8 +517,133 @@ function getStats() {
 }
 
 // ============================================================
+// getStreak — derive current streak + freeze state from Sessions
+// ============================================================
+// GET ?action=getStreak
+//
+// Read-only. Replays the Sessions sheet (one row per completed round;
+// session_id is per-day, so rounds-per-day = number of rows sharing a date).
+//
+// Rules:
+//   - A "streak day" = >=1 round completed that calendar day.
+//   - Earning a freeze: >=3 rounds in a single day earns 1 freeze (max 1, no stacking).
+//   - A freeze auto-covers exactly one missed day; a second consecutive miss breaks the streak.
+//   - Today is handled separately: an unpracticed today must NOT break or consume a freeze.
+//
+// Returns: { streak, frozen, freezes, sessions_today, longest, emotion, today }
+
+function getStreak() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = ss.getSheetByName('Sessions');
+  const tz = Session.getScriptTimeZone();
+  const todayStr = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+
+  // No Sessions sheet yet (fresh install) — read-only, do not create it.
+  if (!sheet) return zeroStreak(todayStr);
+
+  const data = sheet.getDataRange().getValues();
+
+  // Count rounds per calendar day (skip header row 0).
+  const dayCount = {};
+  for (let i = 1; i < data.length; i++) {
+    const d = normalizeDate(data[i][1], tz); // column 1 = date
+    if (!d) continue;
+    dayCount[d] = (dayCount[d] || 0) + 1;
+  }
+
+  const keys = Object.keys(dayCount).sort();
+  if (keys.length === 0) return zeroStreak(todayStr);
+
+  let streak = 0;
+  let freezes = 0;
+  let frozen = false;
+  let longest = 0;
+
+  // Replay every calendar day from the first practice day up to (not incl.) today.
+  const cursor = noonDateFromStr(keys[0]);
+  while (Utilities.formatDate(cursor, tz, 'yyyy-MM-dd') < todayStr) {
+    const key = Utilities.formatDate(cursor, tz, 'yyyy-MM-dd');
+    const rounds = dayCount[key] || 0;
+    if (rounds >= 1) {
+      streak++;
+      frozen = false;
+      if (rounds >= 3 && freezes < 1) freezes = 1;
+      if (streak > longest) longest = streak;
+    } else {
+      if (freezes >= 1) { freezes--; frozen = true; }
+      else { streak = 0; frozen = false; }
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  // Today (not over yet): only practicing today changes state.
+  const todaySessions = dayCount[todayStr] || 0;
+  if (todaySessions >= 1) {
+    streak++;
+    frozen = false;
+    if (todaySessions >= 3 && freezes < 1) freezes = 1;
+    if (streak > longest) longest = streak;
+  }
+  if (streak > longest) longest = streak; // defensive
+
+  const displayFrozen = frozen && todaySessions === 0;
+
+  return {
+    streak: streak,
+    frozen: displayFrozen,
+    freezes: freezes,
+    sessions_today: todaySessions,
+    longest: longest,
+    emotion: emotionFor(streak, displayFrozen),
+    today: todayStr,
+  };
+}
+
+function zeroStreak(todayStr) {
+  return {
+    streak: 0,
+    frozen: false,
+    freezes: 0,
+    sessions_today: 0,
+    longest: 0,
+    emotion: emotionFor(0, false),
+    today: todayStr,
+  };
+}
+
+// Streak-length → emotion emoji. Emoji is data so the notification cron gets it
+// for free; German UI text stays on the frontend.
+function emotionFor(streak, frozen) {
+  if (frozen) return '🥶';
+  if (streak <= 0) return '';
+  if (streak === 1) return '😐';
+  if (streak <= 3) return '🙂';
+  if (streak <= 6) return '😊';
+  if (streak <= 13) return '🤠';
+  if (streak <= 29) return '😄';
+  if (streak <= 59) return '😆';
+  if (streak <= 99) return '🤩';
+  return '⭐';
+}
+
+// ============================================================
 // Helpers
 // ============================================================
+
+// Normalize a sheet date cell to 'yyyy-MM-dd' (cells may be Date or string);
+// returns '' for blank. Mirrors the date handling in getWords/getStats.
+function normalizeDate(cell, tz) {
+  if (cell instanceof Date) return Utilities.formatDate(cell, tz, 'yyyy-MM-dd');
+  if (cell) return String(cell).substring(0, 10);
+  return '';
+}
+
+// Build a Date anchored at noon local time from a 'yyyy-MM-dd' string, so
+// stepping day-by-day with setDate never drifts across a DST boundary.
+function noonDateFromStr(s) {
+  const parts = s.split('-').map(Number);
+  return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0);
+}
 
 function rowToObject(headers, row, rowIndex) {
   const obj = {};

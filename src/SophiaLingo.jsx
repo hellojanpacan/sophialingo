@@ -92,6 +92,20 @@ function checkAnswer(userInput, correctAnswer) {
   return "incorrect";
 }
 
+// ─── Streak emotion ladder (mirrors emotionFor in Code.js) ──
+// Used to project the post-round emotion on the summary screen.
+function emotionFor(streak) {
+  if (streak <= 0) return "";
+  if (streak === 1) return "😐";
+  if (streak <= 3) return "🙂";
+  if (streak <= 6) return "😊";
+  if (streak <= 13) return "🤠";
+  if (streak <= 29) return "😄";
+  if (streak <= 59) return "😆";
+  if (streak <= 99) return "🤩";
+  return "⭐";
+}
+
 // ─── Confetti burst ────────────────────────────────────────
 function Confetti({ count = 40 }) {
   const colors = ["#E8734A", "#F4A261", "#2A9D8F", "#E9C46A", "#264653", "#E76F51", "#A8DADC"];
@@ -185,6 +199,7 @@ export default function SophiaLingo() {
   const [editing, setEditing] = useState(null);   // null | "source" | "target"
   const [editValue, setEditValue] = useState("");
   const [showSentence, setShowSentence] = useState(false);
+  const [streakAtLoad, setStreakAtLoad] = useState(null);  // streak snapshot at app open
 
   // Drain offline queue on load and when connection returns
   useEffect(() => {
@@ -206,6 +221,14 @@ export default function SophiaLingo() {
         setPhase("quiz");
       })
       .catch((err) => { setError(err.message); setPhase("error"); });
+  }, []);
+
+  // Load streak in parallel (fail-soft — never blocks the quiz)
+  useEffect(() => {
+    fetch(`${API_URL}?action=getStreak`)
+      .then((r) => r.json())
+      .then((d) => { if (!d.error) setStreakAtLoad(d); })
+      .catch(() => {});
   }, []);
 
   // Focus input when new word appears
@@ -312,7 +335,19 @@ export default function SophiaLingo() {
         {/* Header */}
         <div style={styles.header}>
           <div style={styles.logo}>SophiaLingo</div>
-          <div style={styles.subtitle}>Spanisch → Deutsch</div>
+          {streakAtLoad && streakAtLoad.streak >= 1 ? (
+            <div style={styles.streakBadge}>
+              {streakAtLoad.frozen ? (
+                <span>🧊</span>
+              ) : (
+                <span style={{ display: "inline-block", animation: "flameFlicker 2.2s ease-in-out infinite" }}>🔥</span>
+              )}
+              <span style={styles.streakNum}>{streakAtLoad.streak}</span>
+              {streakAtLoad.emotion && <span>{streakAtLoad.emotion}</span>}
+            </div>
+          ) : (
+            <div style={styles.subtitle}>Spanisch → Deutsch</div>
+          )}
         </div>
 
         {/* Loading */}
@@ -522,12 +557,41 @@ export default function SophiaLingo() {
         {/* Summary */}
         {phase === "summary" && (
           <div style={{ ...styles.center, animation: "fadeIn 0.5s ease" }}>
-            <div style={{ fontSize: "56px", marginBottom: "8px" }}>
-              {sessionScore.correct + sessionScore.almost >= words.length * 0.8 ? "🏆"
-                : sessionScore.correct + sessionScore.almost >= words.length * 0.5 ? "💪" : "📚"}
-            </div>
-            <p style={styles.heroText}>Geschafft!</p>
-            <p style={styles.mutedText}>{words.length} Wörter geübt</p>
+            {(() => {
+              const s = streakAtLoad;
+              const tierEmoji = sessionScore.correct + sessionScore.almost >= words.length * 0.8 ? "🏆"
+                : sessionScore.correct + sessionScore.almost >= words.length * 0.5 ? "💪" : "📚";
+              const fallback = (
+                <>
+                  <div style={{ fontSize: "56px", marginBottom: "8px" }}>{tierEmoji}</div>
+                  <p style={styles.heroText}>Geschafft!</p>
+                  <p style={styles.mutedText}>{words.length} Wörter geübt</p>
+                </>
+              );
+              if (!s) return fallback;
+
+              const newSessionsToday = s.sessions_today + 1;          // this round just completed
+              const displayedStreak = s.sessions_today === 0 ? s.streak + 1 : s.streak;
+              if (displayedStreak < 1) return fallback;               // defensive — don't rub it in
+
+              const thawed = s.sessions_today === 0 && s.frozen && s.streak >= 1;
+              const freezeEarned = s.freezes === 0 && newSessionsToday >= 3;
+              let line = null;
+              if (thawed) line = "Dein Streak war eingefroren — gerettet! 🧊";
+              else if (freezeEarned) line = "Streak-Freeze verdient! ❄️";
+              else if (s.freezes === 0 && newSessionsToday < 3) line = `Noch ${3 - newSessionsToday} Runden für einen Streak-Freeze ❄️`;
+
+              return (
+                <>
+                  <div style={{ fontSize: "56px", marginBottom: "8px" }}>🔥</div>
+                  <p style={styles.heroText}>
+                    {displayedStreak} {displayedStreak === 1 ? "Tag" : "Tage"} Streak! {emotionFor(displayedStreak)}
+                  </p>
+                  <p style={styles.mutedText}>{words.length} Wörter geübt</p>
+                  {line && <p style={{ ...styles.mutedText, marginTop: "8px", fontWeight: 600, color: "#3D3229" }}>{line}</p>}
+                </>
+              );
+            })()}
 
             <div style={styles.scoreGrid}>
               <div style={styles.scoreCard}>
@@ -701,6 +765,20 @@ const styles = {
     letterSpacing: "1.5px",
     textTransform: "uppercase",
     fontWeight: 500,
+  },
+  streakBadge: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "6px",
+    fontSize: "18px",
+    lineHeight: 1,
+  },
+  streakNum: {
+    fontSize: "18px",
+    fontWeight: 700,
+    color: "#3D3229",
+    letterSpacing: "-0.3px",
   },
   center: {
     flex: 1,
@@ -926,6 +1004,7 @@ const globalCSS = `
   @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes wordIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes flameFlicker { 0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; } 50% { transform: scale(1.08) rotate(-2deg); opacity: 0.92; } }
   @keyframes confettiFall {
     0% { opacity: 1; transform: translateY(0) rotate(0deg); }
     100% { opacity: 0; transform: translateY(100vh) rotate(720deg); }
