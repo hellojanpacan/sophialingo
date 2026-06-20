@@ -282,6 +282,20 @@ export default function SophiaLingo() {
   const [clozeFeedback, setClozeFeedback] = useState(null); // null | { result }
   const [clozeLoading, setClozeLoading] = useState(false);
   const clozeInputRef = useRef(null);
+  // ─── Nemesis-Wörter spotlight ──────────────────────────────
+  const [hardWords, setHardWords] = useState([]);
+  const [nemesisStatus, setNemesisStatus] = useState("idle"); // idle | loading | ready | error
+  const [nemesisEdit, setNemesisEdit] = useState(null);    // null | { word_id, field: "source"|"target" }
+  const [nemesisEditValue, setNemesisEditValue] = useState("");
+  // Practice-only drill of the nemesis words. NEVER calls updateWord/logSession —
+  // no Leitner box changes, no session logging (SSOT invariant 4.1).
+  const [drillWords, setDrillWords] = useState([]);        // shuffled copy of hardWords for the current round
+  const [drillIndex, setDrillIndex] = useState(0);
+  const [drillInput, setDrillInput] = useState("");
+  const [drillFeedback, setDrillFeedback] = useState(null); // null | { result, correctAnswer }
+  const [drillResults, setDrillResults] = useState([]);
+  const [drillDone, setDrillDone] = useState(false);
+  const drillInputRef = useRef(null);
 
   // Drain offline queue on load and when connection returns
   useEffect(() => {
@@ -500,6 +514,109 @@ export default function SophiaLingo() {
       slot,
       eval: newEval,
     });
+  };
+
+  // ─── Nemesis-Wörter ────────────────────────────────────
+  const openNemesis = useCallback(() => {
+    setNemesisEdit(null);
+    setPhase("nemesis");
+    setNemesisStatus("loading");
+    fetch(`${API_URL}?action=getHardWords&limit=5`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) { setNemesisStatus("error"); return; }
+        setHardWords(data.words || []);
+        setNemesisStatus("ready");
+      })
+      .catch(() => setNemesisStatus("error"));
+  }, []);
+
+  const closeNemesis = useCallback(() => {
+    setNemesisEdit(null);
+    setPhase("summary");
+  }, []);
+
+  // Reuse the editWord endpoint (same as the quiz feedback box) per card.
+  const saveNemesisEdit = (wordId, field) => {
+    const trimmed = nemesisEditValue.trim();
+    if (!trimmed) { setNemesisEdit(null); return; }
+    postOrQueue({
+      action: "editWord",
+      word_id: wordId,
+      [field === "source" ? "source_word" : "target_word"]: trimmed,
+    });
+    setHardWords((prev) => prev.map((w) =>
+      w.word_id === wordId
+        ? { ...w, [field === "source" ? "source_word" : "target_word"]: trimmed }
+        : w
+    ));
+    setNemesisEdit(null);
+  };
+
+  // Enter returns to the summary (unless an inline edit is open).
+  useEffect(() => {
+    if (phase !== "nemesis") return;
+    const onKey = (e) => { if (e.key === "Enter" && !nemesisEdit) closeNemesis(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [phase, nemesisEdit, closeNemesis]);
+
+  // ─── Nemesis practice drill (no Leitner / no logging) ──────
+  const startDrill = useCallback(() => {
+    // Fresh shuffle each round so the order isn't always the ranked list.
+    const shuffled = [...hardWords];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    setDrillWords(shuffled);
+    setDrillIndex(0);
+    setDrillInput("");
+    setDrillFeedback(null);
+    setDrillResults([]);
+    setDrillDone(false);
+    setPhase("drill");
+  }, [hardWords]);
+
+  const submitDrill = useCallback(() => {
+    if (!drillInput.trim() || drillFeedback) return;
+    const word = drillWords[drillIndex];
+    const result = checkAnswer(drillInput, word.target_word);
+    setDrillFeedback({ result, correctAnswer: word.target_word });
+    setDrillResults((prev) => { const n = [...prev]; n[drillIndex] = result; return n; });
+    // Practice only — deliberately no postOrQueue(updateWord/logSession).
+  }, [drillInput, drillFeedback, drillWords, drillIndex]);
+
+  const nextDrill = useCallback(() => {
+    if (drillIndex + 1 >= drillWords.length) {
+      setDrillDone(true);
+    } else {
+      setDrillIndex((i) => i + 1);
+      setDrillInput("");
+      setDrillFeedback(null);
+    }
+  }, [drillIndex, drillWords]);
+
+  // Focus the drill input on each new word.
+  useEffect(() => {
+    if (phase === "drill" && !drillDone && !drillFeedback) {
+      setTimeout(() => drillInputRef.current?.focus(), 100);
+    }
+  }, [phase, drillIndex, drillFeedback, drillDone]);
+
+  // On the drill-finished screen, Enter returns to the spotlight.
+  useEffect(() => {
+    if (phase !== "drill" || !drillDone) return;
+    const onKey = (e) => { if (e.key === "Enter") setPhase("nemesis"); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [phase, drillDone]);
+
+  const handleDrillKeyDown = (e) => {
+    if (e.key === "Enter") {
+      if (!drillFeedback) submitDrill();
+      else nextDrill();
+    }
   };
 
   // ─── Render ────────────────────────────────────────────
@@ -886,6 +1003,9 @@ export default function SophiaLingo() {
               <button style={styles.secondaryBtn} onClick={() => setPhase("fortschritt")}>
                 📊 Mein Fortschritt
               </button>
+              <button style={styles.secondaryBtn} onClick={openNemesis}>
+                ⚡ Problemwörter
+              </button>
             </div>
           </div>
         )}
@@ -1040,6 +1160,226 @@ export default function SophiaLingo() {
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Nemesis-Wörter — problem-words spotlight (read-only + inline edit) */}
+        {phase === "nemesis" && (
+          <div style={{ ...styles.quizWrap, animation: "fadeIn 0.5s ease" }}>
+            <p style={styles.nemesisLede}>
+              ⚡ Diese Wörter machen dir zu schaffen — aber du schaffst das!
+            </p>
+
+            {nemesisStatus === "loading" && (
+              <div style={styles.center}>
+                <div style={styles.spinner} />
+                <p style={styles.loadingText}>Problemwörter werden geladen...</p>
+              </div>
+            )}
+
+            {nemesisStatus === "error" && (
+              <div style={styles.center}>
+                <div style={{ fontSize: "40px", marginBottom: "12px" }}>😵</div>
+                <p style={styles.mutedText}>Problemwörter konnten nicht geladen werden.</p>
+              </div>
+            )}
+
+            {nemesisStatus === "ready" && hardWords.length === 0 && (
+              <div style={styles.center}>
+                <div style={{ fontSize: "48px", marginBottom: "12px" }}>🌟</div>
+                <p style={styles.heroText}>Keine Nemesis-Wörter!</p>
+                <p style={styles.mutedText}>Du hast noch keine Wörter falsch beantwortet. Weiter so!</p>
+              </div>
+            )}
+
+            {nemesisStatus === "ready" && hardWords.length > 0 && hardWords.map((w, i) => {
+              const editingSource = nemesisEdit && nemesisEdit.word_id === w.word_id && nemesisEdit.field === "source";
+              const editingTarget = nemesisEdit && nemesisEdit.word_id === w.word_id && nemesisEdit.field === "target";
+              return (
+                <div key={w.word_id} style={{ ...styles.nemesisCard, animationDelay: `${i * 0.06}s` }}>
+                  <div style={styles.nemesisCardTop}>
+                    <span style={styles.nemesisRank}>#{i + 1}</span>
+                    <BoxBadge box={w.leitner_box} />
+                  </div>
+
+                  {/* Spanish word + inline edit */}
+                  <div style={styles.nemesisSource}>
+                    {editingSource ? (
+                      <input
+                        autoFocus
+                        value={nemesisEditValue}
+                        onChange={(e) => setNemesisEditValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveNemesisEdit(w.word_id, "source");
+                          if (e.key === "Escape") setNemesisEdit(null);
+                        }}
+                        style={{ ...styles.input, fontSize: "20px", fontWeight: 700, width: "auto", minWidth: "120px", padding: "4px 10px", marginBottom: 0 }}
+                      />
+                    ) : (
+                      <span>{w.source_word}</span>
+                    )}
+                    {editingSource ? (
+                      <button style={styles.editBtn} onClick={() => saveNemesisEdit(w.word_id, "source")} title="Speichern">💾</button>
+                    ) : (
+                      <button style={styles.editBtn} onClick={() => { setNemesisEditValue(w.source_word); setNemesisEdit({ word_id: w.word_id, field: "source" }); }} title="Wort bearbeiten">✏</button>
+                    )}
+                  </div>
+
+                  {/* German answer + inline edit */}
+                  <div style={styles.nemesisTarget}>
+                    {editingTarget ? (
+                      <input
+                        autoFocus
+                        value={nemesisEditValue}
+                        onChange={(e) => setNemesisEditValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveNemesisEdit(w.word_id, "target");
+                          if (e.key === "Escape") setNemesisEdit(null);
+                        }}
+                        style={{ ...styles.input, fontSize: "14px", fontStyle: "italic", width: "auto", minWidth: "100px", padding: "2px 8px", marginBottom: 0 }}
+                      />
+                    ) : (
+                      <span>{w.target_word}</span>
+                    )}
+                    {editingTarget ? (
+                      <button style={styles.editBtn} onClick={() => saveNemesisEdit(w.word_id, "target")} title="Speichern">💾</button>
+                    ) : (
+                      <button style={styles.editBtn} onClick={() => { setNemesisEditValue(w.target_word); setNemesisEdit({ word_id: w.word_id, field: "target" }); }} title="Antwort bearbeiten">✏</button>
+                    )}
+                  </div>
+
+                  {/* Tally pill */}
+                  <div style={styles.nemesisTally}>
+                    <span style={{ color: "#C25636", fontWeight: 600 }}>{w.times_wrong}× falsch</span>
+                    <span style={{ color: "#B0A89C" }}> · </span>
+                    <span style={{ color: "#1E7D60", fontWeight: 600 }}>{w.times_correct}× richtig</span>
+                  </div>
+                </div>
+              );
+            })}
+
+            <div style={styles.secondaryRow}>
+              {nemesisStatus === "ready" && hardWords.length > 0 && (
+                <button style={styles.primaryBtn} onClick={startDrill}>
+                  ▶ Jetzt üben
+                </button>
+              )}
+              <button style={styles.secondaryBtn} onClick={closeNemesis}>
+                ← Zurück
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Nemesis practice drill — practice only, no Leitner / no logging */}
+        {phase === "drill" && (
+          <div style={{ ...styles.quizWrap, animation: "fadeIn 0.4s ease" }}>
+            {!drillDone ? (
+              <>
+                <ProgressDots total={drillWords.length} current={drillIndex} results={drillResults} />
+                <div style={styles.counter}>
+                  Übung · {drillIndex + 1} / {drillWords.length}
+                </div>
+                <div style={styles.card} key={drillIndex}>
+                  <div style={styles.cardMeta}>
+                    <BoxBadge box={drillWords[drillIndex].leitner_box} />
+                    <span style={styles.drillNote}>zählt nicht für die Box</span>
+                  </div>
+
+                  <div style={styles.spanishWord}>{drillWords[drillIndex].source_word}</div>
+
+                  <div style={styles.inputWrap}>
+                    <input
+                      ref={drillInputRef}
+                      type="text"
+                      value={drillInput}
+                      onChange={(e) => setDrillInput(e.target.value)}
+                      onKeyDown={handleDrillKeyDown}
+                      placeholder="Übersetzung eingeben..."
+                      disabled={!!drillFeedback}
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck="false"
+                      style={{
+                        ...styles.input,
+                        borderColor: drillFeedback
+                          ? drillFeedback.result === "correct" ? "#2A9D8F"
+                            : drillFeedback.result === "almost" ? "#F4A261"
+                            : "#E76F51"
+                          : "#C9C2B8",
+                        backgroundColor: drillFeedback
+                          ? drillFeedback.result === "correct" ? "#F0FAF7"
+                            : drillFeedback.result === "almost" ? "#FFF8EE"
+                            : "#FEF1EE"
+                          : "#FDFCFA",
+                      }}
+                    />
+                  </div>
+
+                  {drillFeedback && (
+                    <div style={{ ...styles.feedbackBox, animation: "slideUp 0.3s ease" }}>
+                      {drillFeedback.result === "correct" && (
+                        <>
+                          <div style={styles.feedbackIcon}>✓</div>
+                          <div style={{ ...styles.feedbackLabel, color: "#1E7D60" }}>Richtig!</div>
+                        </>
+                      )}
+                      {drillFeedback.result === "almost" && (
+                        <>
+                          <div style={{ ...styles.feedbackIcon, color: "#B87A2B" }}>≈</div>
+                          <div style={{ ...styles.feedbackLabel, color: "#B87A2B" }}>Fast richtig!</div>
+                        </>
+                      )}
+                      {drillFeedback.result === "incorrect" && (
+                        <>
+                          <div style={{ ...styles.feedbackIcon, color: "#C25636" }}>✗</div>
+                          <div style={{ ...styles.feedbackLabel, color: "#C25636" }}>Nicht ganz</div>
+                        </>
+                      )}
+                      <div style={styles.correctAnswer}>{drillFeedback.correctAnswer}</div>
+                    </div>
+                  )}
+
+                  <div style={styles.btnRow}>
+                    {!drillFeedback ? (
+                      <button style={{ ...styles.primaryBtn, opacity: drillInput.trim() ? 1 : 0.5 }} onClick={submitDrill} disabled={!drillInput.trim()}>
+                        Prüfen
+                      </button>
+                    ) : (
+                      <button style={styles.primaryBtn} onClick={nextDrill}>
+                        {drillIndex + 1 >= drillWords.length ? "Ergebnis anzeigen" : "Weiter →"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (() => {
+              const wrong = drillResults.filter((r) => r === "incorrect").length;
+              const cleanSweep = wrong === 0;
+              return (
+                <div style={{ ...styles.center, animation: "fadeIn 0.5s ease" }}>
+                  {cleanSweep && <Confetti />}
+                  <div style={{ fontSize: "56px", marginBottom: "8px" }}>{cleanSweep ? "🏆" : "💪"}</div>
+                  <p style={styles.heroText}>
+                    {cleanSweep ? "Heute hast du gewonnen." : "Gut geübt!"}
+                  </p>
+                  <p style={styles.mutedText}>
+                    {cleanSweep
+                      ? "Alle Nemesis-Wörter gemeistert — keine einzige Niederlage!"
+                      : `${drillWords.length - wrong} von ${drillWords.length} richtig. Diese Übung zählt nicht für die Box — nur fürs Selbstvertrauen.`}
+                  </p>
+                  <div style={styles.secondaryRow}>
+                    <button style={styles.primaryBtn} onClick={startDrill}>
+                      ↻ Nochmal üben
+                    </button>
+                    <button style={styles.secondaryBtn} onClick={() => setPhase("nemesis")}>
+                      ← Zurück
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -1524,6 +1864,68 @@ const styles = {
     fontStyle: "italic",
     marginBottom: "24px",
     minHeight: "60px",
+  },
+  drillNote: {
+    fontSize: "11px",
+    color: "#B0A89C",
+    fontStyle: "italic",
+    letterSpacing: "0.3px",
+  },
+  nemesisLede: {
+    fontSize: "15px",
+    fontWeight: 600,
+    color: "#3D3229",
+    textAlign: "center",
+    lineHeight: 1.5,
+    margin: "4px 0 20px",
+  },
+  nemesisCard: {
+    backgroundColor: "#FDFCFA",
+    borderRadius: "16px",
+    padding: "18px 20px",
+    marginBottom: "12px",
+    boxShadow: "0 1px 3px rgba(61,50,41,0.06), 0 8px 24px rgba(61,50,41,0.04)",
+    border: "1px solid rgba(61,50,41,0.06)",
+    opacity: 0,
+    animation: "slideUp 0.35s ease forwards",
+  },
+  nemesisCardTop: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "10px",
+  },
+  nemesisRank: {
+    fontSize: "13px",
+    fontWeight: 700,
+    color: "#B0A89C",
+    letterSpacing: "0.5px",
+  },
+  nemesisSource: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    fontSize: "22px",
+    fontWeight: 700,
+    color: "#2C2218",
+    letterSpacing: "-0.3px",
+    marginBottom: "2px",
+  },
+  nemesisTarget: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    fontSize: "15px",
+    fontStyle: "italic",
+    color: "#6B5F52",
+    marginBottom: "12px",
+  },
+  nemesisTally: {
+    display: "inline-block",
+    fontSize: "13px",
+    backgroundColor: "#F5F0E8",
+    borderRadius: "20px",
+    padding: "5px 14px",
   },
   footer: {
     textAlign: "center",

@@ -37,11 +37,14 @@ function doGet(e) {
       case 'getsentences':
         result = getSentences();
         break;
+      case 'gethardwords':
+        result = getHardWords(e.parameter);
+        break;
       case 'ping':
         result = { ok: true, timestamp: new Date().toISOString() };
         break;
       default:
-        result = { error: 'Unknown action. Use: getWords, getStats, getStreak, ping' };
+        result = { error: 'Unknown action. Use: getWords, getStats, getStreak, getHardWords, getSentences, ping' };
     }
 
     return jsonResponse(result);
@@ -706,6 +709,48 @@ function getSentences() {
   }
 
   return { words, total: words.length };
+}
+
+// ============================================================
+// getHardWords — top problem words ranked by times_wrong
+// ============================================================
+// GET ?action=getHardWords&limit=5
+// Scans the whole word sheet (ignores due date) and returns the
+// words with the most wrong answers, descending. Powers the
+// "Nemesis-Wörter" spotlight screen. Read-only — never touches
+// Leitner state.
+
+function getHardWords(params) {
+  const limit = parseInt(params.limit) || 5;
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName('SophiaLingo Database');
+  if (!sheet) return { error: 'Sheet "SophiaLingo Database" not found' };
+
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+
+  const words = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = rowToObject(headers, data[i], i + 1);
+    const timesWrong = parseInt(row.times_wrong) || 0;
+    if (timesWrong <= 0) continue; // only words she's actually missed
+    words.push({
+      word_id: row.word_id,
+      source_word: row.source_word,
+      target_word: row.target_word,
+      leitner_box: parseInt(row.leitner_box) || 1,
+      times_correct: parseInt(row.times_correct) || 0,
+      times_wrong: timesWrong,
+    });
+  }
+
+  // Most-missed first; tiebreak by fewest correct (the truly sticky ones).
+  words.sort((a, b) => {
+    if (b.times_wrong !== a.times_wrong) return b.times_wrong - a.times_wrong;
+    return a.times_correct - b.times_correct;
+  });
+
+  const selected = words.slice(0, limit);
+  return { words: selected, total: words.length };
 }
 
 // ============================================================
