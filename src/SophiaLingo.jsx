@@ -207,16 +207,18 @@ function Confetti({ count = 40 }) {
   return <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none", zIndex: 999, overflow: "hidden" }}>{pieces}</div>;
 }
 
+// ─── Leitner box palette (SSOT Design System) ──────────────
+const boxColors = {
+  1: { bg: "#FDEAE4", text: "#C25636" },
+  2: { bg: "#FEF3E2", text: "#B87A2B" },
+  3: { bg: "#E8F5F0", text: "#1E7D60" },
+  4: { bg: "#E3F0FC", text: "#2563A8" },
+  5: { bg: "#EDE9FE", text: "#6D48C4" },
+};
+
 // ─── Box badge ─────────────────────────────────────────────
 function BoxBadge({ box }) {
-  const colors = {
-    1: { bg: "#FDEAE4", text: "#C25636" },
-    2: { bg: "#FEF3E2", text: "#B87A2B" },
-    3: { bg: "#E8F5F0", text: "#1E7D60" },
-    4: { bg: "#E3F0FC", text: "#2563A8" },
-    5: { bg: "#EDE9FE", text: "#6D48C4" },
-  };
-  const c = colors[box] || colors[1];
+  const c = boxColors[box] || boxColors[1];
   return (
     <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: "12px", fontSize: "12px", fontWeight: 600, backgroundColor: c.bg, color: c.text, letterSpacing: "0.3px" }}>
       Box {box}
@@ -270,6 +272,7 @@ export default function SophiaLingo() {
   const [showSentence, setShowSentence] = useState(false);
   const [showHint, setShowHint] = useState(false);        // pre-answer hint sentence screen
   const [streakAtLoad, setStreakAtLoad] = useState(null);  // streak snapshot at app open
+  const [stats, setStats] = useState(null);                // getStats snapshot (box distribution + lifetime accuracy)
   const [sentenceSlots, setSentenceSlots] = useState([]);
   const [hintSlots, setHintSlots] = useState([]);          // per-word hint sentence slot (null = no hint)
   // ─── Lückentext (cloze) — local BONUS practice, no Leitner/session effects ──
@@ -324,6 +327,22 @@ export default function SophiaLingo() {
       .then((d) => { if (!d.error) setStreakAtLoad(d); })
       .catch(() => {});
   }, []);
+
+  // Load stats in parallel for the "Mein Fortschritt" screen (fail-soft — read-only)
+  useEffect(() => {
+    fetch(`${API_URL}?action=getStats`)
+      .then((r) => r.json())
+      .then((d) => { if (!d.error) setStats(d); })
+      .catch(() => {});
+  }, []);
+
+  // "Mein Fortschritt" is read-only — Enter returns to the summary (speed over ceremony)
+  useEffect(() => {
+    if (phase !== "fortschritt") return;
+    const onKey = (e) => { if (e.key === "Enter") setPhase("summary"); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [phase]);
 
   // Focus input when new word appears
   useEffect(() => {
@@ -864,7 +883,67 @@ export default function SophiaLingo() {
               <button style={styles.secondaryBtn} onClick={startCloze} disabled={clozeLoading}>
                 {clozeLoading ? "Lädt…" : "✏️ Lückentext"}
               </button>
+              <button style={styles.secondaryBtn} onClick={() => setPhase("fortschritt")}>
+                📊 Mein Fortschritt
+              </button>
             </div>
+          </div>
+        )}
+
+        {/* Mein Fortschritt — read-only progress dashboard */}
+        {phase === "fortschritt" && (
+          <div style={{ ...styles.center, animation: "fadeIn 0.5s ease", justifyContent: "flex-start" }}>
+            <p style={{ ...styles.heroText, marginTop: "8px" }}>Mein Fortschritt</p>
+
+            {!stats ? (
+              <p style={{ ...styles.mutedText, marginTop: "24px" }}>Statistiken werden geladen…</p>
+            ) : (
+              <>
+                {/* Leitner box distribution */}
+                <div style={styles.progressSection}>
+                  <p style={styles.progressSectionTitle}>Leitner-Boxen</p>
+                  {(() => {
+                    const dist = stats.box_distribution || {};
+                    const max = Math.max(1, ...[1, 2, 3, 4, 5].map((b) => dist[b] || 0));
+                    return [1, 2, 3, 4, 5].map((b) => {
+                      const count = dist[b] || 0;
+                      const c = boxColors[b];
+                      return (
+                        <div key={b} style={styles.barRow}>
+                          <span style={{ ...styles.barBoxLabel, color: c.text }}>{b}</span>
+                          <div style={styles.barTrack}>
+                            <div style={{
+                              ...styles.barFill,
+                              width: `${(count / max) * 100}%`,
+                              backgroundColor: c.bg,
+                              borderRight: count > 0 ? `3px solid ${c.text}` : "none",
+                            }} />
+                          </div>
+                          <span style={styles.barCount}>{count}</span>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+
+                {/* Lifetime accuracy */}
+                <div style={styles.progressSection}>
+                  <div style={styles.bigStat}>{stats.lifetime_accuracy}%</div>
+                  <div style={styles.bigStatCaption}>Genauigkeit</div>
+                </div>
+
+                {/* Longest streak */}
+                <div style={styles.progressSection}>
+                  <p style={styles.mutedText}>
+                    Längste Serie: <strong style={{ color: "#3D3229" }}>{(streakAtLoad?.longest ?? 0)} {(streakAtLoad?.longest === 1) ? "Tag" : "Tage"}</strong>
+                  </p>
+                </div>
+              </>
+            )}
+
+            <button style={{ ...styles.secondaryBtn, marginTop: "28px" }} onClick={() => setPhase("summary")}>
+              Zurück
+            </button>
           </div>
         )}
 
@@ -1347,6 +1426,70 @@ const styles = {
     fontFamily: "'DM Sans', sans-serif",
     transition: "transform 0.15s, box-shadow 0.15s",
     boxShadow: "0 1px 3px rgba(61,50,41,0.06)",
+  },
+  progressSection: {
+    width: "100%",
+    maxWidth: "360px",
+    margin: "24px auto 0",
+    textAlign: "center",
+  },
+  progressSectionTitle: {
+    fontSize: "12px",
+    color: "#8A7F72",
+    fontWeight: 500,
+    textTransform: "uppercase",
+    letterSpacing: "0.5px",
+    marginBottom: "14px",
+    textAlign: "left",
+  },
+  barRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    marginBottom: "8px",
+  },
+  barBoxLabel: {
+    fontSize: "13px",
+    fontWeight: 700,
+    width: "14px",
+    flexShrink: 0,
+    textAlign: "center",
+  },
+  barTrack: {
+    flex: 1,
+    height: "20px",
+    backgroundColor: "#E8E3DA",
+    borderRadius: "6px",
+    overflow: "hidden",
+  },
+  barFill: {
+    height: "100%",
+    borderRadius: "6px",
+    minWidth: "3px",
+    transition: "width 0.5s ease",
+  },
+  barCount: {
+    fontSize: "13px",
+    fontWeight: 600,
+    color: "#6B5F52",
+    width: "28px",
+    flexShrink: 0,
+    textAlign: "right",
+  },
+  bigStat: {
+    fontSize: "52px",
+    fontWeight: 700,
+    color: "#2A9D8F",
+    lineHeight: 1,
+    letterSpacing: "-1px",
+  },
+  bigStatCaption: {
+    fontSize: "13px",
+    color: "#8A7F72",
+    fontWeight: 500,
+    textTransform: "uppercase",
+    letterSpacing: "0.5px",
+    marginTop: "6px",
   },
   clozeTopRow: {
     display: "flex",
