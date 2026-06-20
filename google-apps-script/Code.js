@@ -303,7 +303,12 @@ function addWords(body) {
       0,            // times_wrong
       today,        // date_added
       addSource,    // source
-      w.example_sentence ? w.example_sentence.trim() : '',
+      w.example_sentence  ? w.example_sentence.trim()  : '',  // example_sentence
+      '',                                                       // sentence_eval
+      w.example_sentence_2 ? w.example_sentence_2.trim() : '', // example_sentence_2
+      '',                                                       // sentence_eval_2
+      w.example_sentence_3 ? w.example_sentence_3.trim() : '', // example_sentence_3
+      '',                                                       // sentence_eval_3
     ];
     rowsToAdd.push(row);
     addedWords.push({ word_id: wordId, source_word: w.source_word, target_word: w.target_word });
@@ -378,13 +383,17 @@ function editWord(body) {
   const wordId = body.word_id;
   if (!wordId) return { error: 'word_id is required' };
 
-  const hasSource   = typeof body.source_word       === 'string' && body.source_word.trim()       !== '';
-  const hasTarget   = typeof body.target_word       === 'string' && body.target_word.trim()       !== '';
-  const hasSentence = typeof body.example_sentence  === 'string';
-  const hasEval     = typeof body.sentence_eval     === 'string' && ['up', 'down', ''].includes(body.sentence_eval);
+  const hasSource    = typeof body.source_word        === 'string' && body.source_word.trim()        !== '';
+  const hasTarget    = typeof body.target_word        === 'string' && body.target_word.trim()        !== '';
+  const hasSentence  = typeof body.example_sentence   === 'string';
+  const hasSentence2 = typeof body.example_sentence_2 === 'string';
+  const hasSentence3 = typeof body.example_sentence_3 === 'string';
+  const hasEval      = typeof body.sentence_eval      === 'string' && ['up', 'down', ''].includes(body.sentence_eval);
+  const hasEval2     = typeof body.sentence_eval_2    === 'string' && ['up', 'down', ''].includes(body.sentence_eval_2);
+  const hasEval3     = typeof body.sentence_eval_3    === 'string' && ['up', 'down', ''].includes(body.sentence_eval_3);
 
-  if (!hasSource && !hasTarget && !hasSentence && !hasEval) {
-    return { error: 'At least one of source_word, target_word, example_sentence, or sentence_eval is required' };
+  if (!hasSource && !hasTarget && !hasSentence && !hasSentence2 && !hasSentence3 && !hasEval && !hasEval2 && !hasEval3) {
+    return { error: 'At least one updatable field is required' };
   }
 
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName('SophiaLingo Database');
@@ -418,6 +427,22 @@ function editWord(body) {
     sheet.getRange(rowIndex + 1, cols['sentence_eval'] + 1).setValue(body.sentence_eval);
     updated.sentence_eval = body.sentence_eval;
   }
+  if (hasSentence2) {
+    sheet.getRange(rowIndex + 1, cols['example_sentence_2'] + 1).setValue(body.example_sentence_2.trim());
+    updated.example_sentence_2 = body.example_sentence_2.trim();
+  }
+  if (hasEval2) {
+    sheet.getRange(rowIndex + 1, cols['sentence_eval_2'] + 1).setValue(body.sentence_eval_2);
+    updated.sentence_eval_2 = body.sentence_eval_2;
+  }
+  if (hasSentence3) {
+    sheet.getRange(rowIndex + 1, cols['example_sentence_3'] + 1).setValue(body.example_sentence_3.trim());
+    updated.example_sentence_3 = body.example_sentence_3.trim();
+  }
+  if (hasEval3) {
+    sheet.getRange(rowIndex + 1, cols['sentence_eval_3'] + 1).setValue(body.sentence_eval_3);
+    updated.sentence_eval_3 = body.sentence_eval_3;
+  }
 
   return { word_id: wordId, updated };
 }
@@ -436,6 +461,12 @@ function evalSentence(body) {
     return { error: 'eval must be "up", "down", or ""' };
   }
 
+  const slot = parseInt(body.slot) || 1;
+  if (![1, 2, 3].includes(slot)) {
+    return { error: 'slot must be 1, 2, or 3' };
+  }
+  const colName = slot === 1 ? 'sentence_eval' : 'sentence_eval_' + slot;
+
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName('SophiaLingo Database');
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
@@ -443,8 +474,8 @@ function evalSentence(body) {
   const cols = {};
   headers.forEach((h, idx) => { cols[h] = idx; });
 
-  if (cols['sentence_eval'] === undefined) {
-    return { error: 'sentence_eval column not found in sheet' };
+  if (cols[colName] === undefined) {
+    return { error: colName + ' column not found in sheet' };
   }
 
   let rowIndex = -1;
@@ -453,9 +484,9 @@ function evalSentence(body) {
   }
   if (rowIndex === -1) return { error: 'Word not found: ' + wordId };
 
-  sheet.getRange(rowIndex + 1, cols['sentence_eval'] + 1).setValue(evalValue);
+  sheet.getRange(rowIndex + 1, cols[colName] + 1).setValue(evalValue);
 
-  return { word_id: wordId, sentence_eval: evalValue };
+  return { word_id: wordId, slot: slot, sentence_eval: evalValue };
 }
 
 // ============================================================
@@ -662,8 +693,12 @@ function getSentences() {
       word_id: row.word_id,
       source_word: row.source_word,
       target_word: row.target_word,
-      example_sentence: row.example_sentence,
-      sentence_eval: row.sentence_eval || '',
+      example_sentence:   row.example_sentence   || '',
+      sentence_eval:      row.sentence_eval      || '',
+      example_sentence_2: row.example_sentence_2 || '',
+      sentence_eval_2:    row.sentence_eval_2    || '',
+      example_sentence_3: row.example_sentence_3 || '',
+      sentence_eval_3:    row.sentence_eval_3    || '',
       leitner_box: parseInt(row.leitner_box) || 1,
       times_correct: parseInt(row.times_correct) || 0,
       times_wrong: parseInt(row.times_wrong) || 0,
