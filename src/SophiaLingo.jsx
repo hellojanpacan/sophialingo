@@ -200,6 +200,7 @@ export default function SophiaLingo() {
   const [editValue, setEditValue] = useState("");
   const [showSentence, setShowSentence] = useState(false);
   const [streakAtLoad, setStreakAtLoad] = useState(null);  // streak snapshot at app open
+  const [sentenceSlots, setSentenceSlots] = useState([]);
 
   // Drain offline queue on load and when connection returns
   useEffect(() => {
@@ -218,6 +219,11 @@ export default function SophiaLingo() {
         setWords(data.words);
         setTotalDue(data.total_due);
         setResults(new Array(data.words.length).fill(null));
+        const slots = data.words.map((w) => {
+          const available = [1, 2, 3].filter((s) => (s === 1 ? w.example_sentence : w[`example_sentence_${s}`]));
+          return available.length ? available[Math.floor(Math.random() * available.length)] : 1;
+        });
+        setSentenceSlots(slots);
         setPhase("quiz");
       })
       .catch((err) => { setError(err.message); setPhase("error"); });
@@ -260,7 +266,9 @@ export default function SophiaLingo() {
 
   const nextWord = useCallback(() => {
     setEditing(null);
-    if (!showSentence && words[current]?.example_sentence) {
+    const slot = sentenceSlots[current] || 1;
+    const activeSentence = slot === 1 ? words[current]?.example_sentence : words[current]?.[`example_sentence_${slot}`];
+    if (!showSentence && activeSentence) {
       setShowSentence(true);
       return;
     }
@@ -277,7 +285,7 @@ export default function SophiaLingo() {
       setInput("");
       setFeedback(null);
     }
-  }, [current, words, results, showSentence]);
+  }, [current, words, results, showSentence, sentenceSlots]);
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
@@ -311,15 +319,19 @@ export default function SophiaLingo() {
   const handleSentenceEval = (e, value) => {
     e.stopPropagation();
     const word = words[current];
-    const newEval = word.sentence_eval === value ? "" : value;
+    const slot = sentenceSlots[current] || 1;
+    const evalKey = slot === 1 ? "sentence_eval" : `sentence_eval_${slot}`;
+    const currentEval = word[evalKey] || "";
+    const newEval = currentEval === value ? "" : value;
 
     const newWords = [...words];
-    newWords[current] = { ...newWords[current], sentence_eval: newEval };
+    newWords[current] = { ...newWords[current], [evalKey]: newEval };
     setWords(newWords);
 
     postOrQueue({
       action: "evalSentence",
       word_id: word.word_id,
+      slot,
       eval: newEval,
     });
   };
@@ -390,49 +402,55 @@ export default function SophiaLingo() {
             </div>
 
             {/* Sentence reveal */}
-            {showSentence && (
-              <div style={styles.sentenceScreen} onClick={nextWord}>
-                <p style={styles.sentenceText}>
-                  {words[current].example_sentence.split(" ").map((word, i) => (
-                    <span
-                      key={i}
+            {showSentence && (() => {
+              const slot = sentenceSlots[current] || 1;
+              const sentence = slot === 1 ? words[current].example_sentence : words[current][`example_sentence_${slot}`];
+              const evalKey = slot === 1 ? "sentence_eval" : `sentence_eval_${slot}`;
+              const currentEval = words[current][evalKey] || "";
+              return (
+                <div style={styles.sentenceScreen} onClick={nextWord}>
+                  <p style={styles.sentenceText}>
+                    {sentence.split(" ").map((word, i) => (
+                      <span
+                        key={i}
+                        style={{
+                          display: "inline-block",
+                          opacity: 0,
+                          animation: "wordIn 0.35s ease forwards",
+                          animationDelay: `${i * 0.1}s`,
+                          marginRight: "0.25em",
+                        }}
+                      >
+                        {word}
+                      </span>
+                    ))}
+                  </p>
+                  <div style={styles.sentenceEvalRow}>
+                    <button
                       style={{
-                        display: "inline-block",
-                        opacity: 0,
-                        animation: "wordIn 0.35s ease forwards",
-                        animationDelay: `${i * 0.1}s`,
-                        marginRight: "0.25em",
+                        ...(currentEval === "up" ? styles.thumbBtnActive : styles.thumbBtn),
+                        ...(currentEval === "up" ? { transform: "scale(1.15)" } : {}),
                       }}
+                      onClick={(e) => handleSentenceEval(e, "up")}
+                      title="Guter Satz"
                     >
-                      {word}
-                    </span>
-                  ))}
-                </p>
-                <div style={styles.sentenceEvalRow}>
-                  <button
-                    style={{
-                      ...(words[current].sentence_eval === "up" ? styles.thumbBtnActive : styles.thumbBtn),
-                      ...(words[current].sentence_eval === "up" ? { transform: "scale(1.15)" } : {}),
-                    }}
-                    onClick={(e) => handleSentenceEval(e, "up")}
-                    title="Guter Satz"
-                  >
-                    👍
-                  </button>
-                  <button
-                    style={{
-                      ...(words[current].sentence_eval === "down" ? styles.thumbBtnActive : styles.thumbBtn),
-                      ...(words[current].sentence_eval === "down" ? { transform: "scale(1.15)" } : {}),
-                    }}
-                    onClick={(e) => handleSentenceEval(e, "down")}
-                    title="Schlechter Satz"
-                  >
-                    👎
-                  </button>
+                      👍
+                    </button>
+                    <button
+                      style={{
+                        ...(currentEval === "down" ? styles.thumbBtnActive : styles.thumbBtn),
+                        ...(currentEval === "down" ? { transform: "scale(1.15)" } : {}),
+                      }}
+                      onClick={(e) => handleSentenceEval(e, "down")}
+                      title="Schlechter Satz"
+                    >
+                      👎
+                    </button>
+                  </div>
+                  <span style={styles.sentenceTapHint}>Tippe um fortzufahren</span>
                 </div>
-                <span style={styles.sentenceTapHint}>Tippe um fortzufahren</span>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Word card */}
             {!showSentence && <div style={styles.card} key={current}>
