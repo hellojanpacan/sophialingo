@@ -106,26 +106,32 @@ function normalizeEs(str) {
     .trim();
 }
 
-// Mirrors the §8 thresholds, but on Spanish-normalized strings.
-function checkCloze(userInput, answer) {
-  const u = normalizeEs(userInput);
-  const a = normalizeEs(answer);
-  if (!u || !a) return "incorrect";
-  if (u === a) return "correct";
-  const dist = levenshtein(u, a);
-  const threshold = a.length <= 4 ? 1 : a.length <= 8 ? 2 : 3;
-  if (dist <= threshold) return "almost";
-  return "incorrect";
-}
-
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Assemble 4 shuffled options: the answer plus up to 3 distractor source words
+// drawn from the rest of the pool (deduped, never equal to the answer).
+function buildClozeOptions(answer, distractorPool) {
+  const seen = new Set([normalizeEs(answer)]);
+  const distractors = [];
+  for (const cand of [...distractorPool].sort(() => Math.random() - 0.5)) {
+    const c = (cand || "").trim();
+    if (!c) continue;
+    const norm = normalizeEs(c);
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    distractors.push(c);
+    if (distractors.length >= 3) break;
+  }
+  return [answer, ...distractors].sort(() => Math.random() - 0.5);
+}
+
 // Build one cloze round from a word: pick a random sentence slot whose text
-// actually contains the source word (case-insensitive), and blank it out.
+// actually contains the source word (case-insensitive), blank it out, and
+// assemble 4 multiple-choice options (answer + distractors from the pool).
 // Returns null if no slot contains a matchable surface form (skip the word).
-function buildClozeRound(word) {
+function buildClozeRound(word, distractorPool) {
   const sentences = [word.example_sentence, word.example_sentence_2, word.example_sentence_3]
     .filter(Boolean);
   // shuffle slots so a multi-sentence word varies which one is shown
@@ -139,6 +145,7 @@ function buildClozeRound(word) {
         blanked: sentence.replace(re, "_____"),
         full: sentence,
         answer: src,
+        options: buildClozeOptions(src, distractorPool),
         leitner_box: word.leitner_box || 1,
       };
     }
@@ -147,15 +154,18 @@ function buildClozeRound(word) {
 }
 
 // Build a pool of 5–10 rounds. Prefer words in box ≥ 2 (already seen) for a
-// fairer challenge, then fill remaining slots from the rest.
+// fairer challenge, then fill remaining slots from the rest. Distractor options
+// are drawn from every source word in the pool. A round needs ≥ 2 options to be
+// a usable multiple-choice question.
 function buildClozePool(words) {
+  const distractorPool = words.map((w) => (w.source_word || "").trim()).filter(Boolean);
   const seen = words.filter((w) => (w.leitner_box || 1) >= 2).sort(() => Math.random() - 0.5);
   const fresh = words.filter((w) => (w.leitner_box || 1) < 2).sort(() => Math.random() - 0.5);
   const ordered = [...seen, ...fresh];
   const rounds = [];
   for (const w of ordered) {
-    const r = buildClozeRound(w);
-    if (r) rounds.push(r);
+    const r = buildClozeRound(w, distractorPool);
+    if (r && r.options.length >= 2) rounds.push(r);
     if (rounds.length >= 10) break;
   }
   return rounds;
@@ -278,10 +288,8 @@ export default function SophiaLingo() {
   // ─── Lückentext (cloze) — local BONUS practice, no Leitner/session effects ──
   const [clozeRounds, setClozeRounds] = useState([]);
   const [clozeIdx, setClozeIdx] = useState(0);
-  const [clozeInput, setClozeInput] = useState("");
-  const [clozeFeedback, setClozeFeedback] = useState(null); // null | { result }
+  const [clozeFeedback, setClozeFeedback] = useState(null); // null | { result, selected }
   const [clozeLoading, setClozeLoading] = useState(false);
-  const clozeInputRef = useRef(null);
   // ─── Nemesis-Wörter spotlight ──────────────────────────────
   const [hardWords, setHardWords] = useState([]);
   const [nemesisStatus, setNemesisStatus] = useState("idle"); // idle | loading | ready | error
@@ -365,13 +373,6 @@ export default function SophiaLingo() {
     }
   }, [current, phase, feedback]);
 
-  // Focus the cloze input when a new round appears
-  useEffect(() => {
-    if (phase === "luecke" && !clozeFeedback && clozeInputRef.current) {
-      setTimeout(() => clozeInputRef.current?.focus(), 100);
-    }
-  }, [clozeIdx, phase, clozeFeedback]);
-
   // ─── Lückentext handlers ──────────────────────────────────
   // Enter cloze mode from Summary. Prefer the richer getSentences pool;
   // fall back to the words already fetched for the quiz. Never touches Leitner.
@@ -390,16 +391,18 @@ export default function SophiaLingo() {
     setShowConfetti(false);
     setClozeRounds(rounds);
     setClozeIdx(0);
-    setClozeInput("");
     setClozeFeedback(null);
     setPhase("luecke");
   }, [words]);
 
-  const submitCloze = useCallback(() => {
-    if (!clozeInput.trim() || clozeFeedback) return;
+  // Multiple-choice pick: lock in the chosen option and score it. Exact match
+  // against the answer — a distractor is never "almost".
+  const selectCloze = useCallback((option) => {
+    if (clozeFeedback) return;
     const round = clozeRounds[clozeIdx];
-    setClozeFeedback({ result: checkCloze(clozeInput, round.answer) });
-  }, [clozeInput, clozeFeedback, clozeRounds, clozeIdx]);
+    const result = normalizeEs(option) === normalizeEs(round.answer) ? "correct" : "incorrect";
+    setClozeFeedback({ result, selected: option });
+  }, [clozeFeedback, clozeRounds, clozeIdx]);
 
   const nextCloze = useCallback(() => {
     if (clozeIdx + 1 >= clozeRounds.length) {
@@ -407,16 +410,25 @@ export default function SophiaLingo() {
       return;
     }
     setClozeIdx((i) => i + 1);
-    setClozeInput("");
     setClozeFeedback(null);
   }, [clozeIdx, clozeRounds]);
 
-  const handleClozeKey = (e) => {
-    if (e.key === "Enter") {
-      if (!clozeFeedback) submitCloze();
-      else nextCloze();
-    }
-  };
+  // Keyboard: 1–4 pick an option, Enter advances after feedback (speed over ceremony)
+  useEffect(() => {
+    if (phase !== "luecke") return;
+    const onKey = (e) => {
+      const round = clozeRounds[clozeIdx];
+      if (!round) return;
+      if (!clozeFeedback) {
+        const n = parseInt(e.key, 10);
+        if (n >= 1 && n <= round.options.length) selectCloze(round.options[n - 1]);
+      } else if (e.key === "Enter") {
+        nextCloze();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [phase, clozeFeedback, clozeRounds, clozeIdx, selectCloze, nextCloze]);
 
   const submitAnswer = useCallback(() => {
     if (!input.trim() || feedback) return;
@@ -1104,61 +1116,54 @@ export default function SophiaLingo() {
                 </p>
               )}
 
-              <div style={styles.inputWrap}>
-                <input
-                  ref={clozeInputRef}
-                  type="text"
-                  value={clozeInput}
-                  onChange={(e) => setClozeInput(e.target.value)}
-                  onKeyDown={handleClozeKey}
-                  placeholder="Fehlendes Wort…"
-                  disabled={!!clozeFeedback}
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  spellCheck="false"
-                  style={{
-                    ...styles.input,
-                    borderColor: clozeFeedback
-                      ? clozeFeedback.result === "correct" ? "#2A9D8F"
-                        : clozeFeedback.result === "almost" ? "#F4A261"
-                        : "#E76F51"
-                      : "#C9C2B8",
-                    backgroundColor: clozeFeedback
-                      ? clozeFeedback.result === "correct" ? "#F0FAF7"
-                        : clozeFeedback.result === "almost" ? "#FFF8EE"
-                        : "#FEF1EE"
-                      : "#FDFCFA",
-                  }}
-                />
+              <div style={styles.clozeOptions}>
+                {clozeRounds[clozeIdx].options.map((opt, i) => {
+                  const isAnswer = normalizeEs(opt) === normalizeEs(clozeRounds[clozeIdx].answer);
+                  const isPicked = clozeFeedback && normalizeEs(opt) === normalizeEs(clozeFeedback.selected);
+                  let bg = "#FDFCFA", border = "#C9C2B8", color = "#3D3229";
+                  if (clozeFeedback) {
+                    if (isAnswer) { bg = "#F0FAF7"; border = "#2A9D8F"; color = "#1E7D60"; }
+                    else if (isPicked) { bg = "#FEF1EE"; border = "#E76F51"; color = "#C25636"; }
+                    else { color = "#B0A89C"; }
+                  }
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => selectCloze(opt)}
+                      disabled={!!clozeFeedback}
+                      style={{
+                        ...styles.clozeOption,
+                        backgroundColor: bg,
+                        borderColor: border,
+                        color,
+                        cursor: clozeFeedback ? "default" : "pointer",
+                      }}
+                    >
+                      <span style={styles.clozeOptionNum}>{i + 1}</span>
+                      {opt}
+                    </button>
+                  );
+                })}
               </div>
 
               {clozeFeedback && (
                 <div style={{ ...styles.feedbackBox, animation: "slideUp 0.3s ease" }}>
-                  {clozeFeedback.result === "correct" && (
+                  {clozeFeedback.result === "correct" ? (
                     <div style={{ ...styles.feedbackLabel, color: "#1E7D60" }}>✓ Richtig!</div>
-                  )}
-                  {clozeFeedback.result === "almost" && (
-                    <div style={{ ...styles.feedbackLabel, color: "#B87A2B" }}>≈ Fast…</div>
-                  )}
-                  {clozeFeedback.result === "incorrect" && (
+                  ) : (
                     <div style={{ ...styles.feedbackLabel, color: "#C25636" }}>✗ Nicht ganz</div>
                   )}
                   <div style={styles.correctAnswer}>{clozeRounds[clozeIdx].answer}</div>
                 </div>
               )}
 
-              <div style={styles.btnRow}>
-                {!clozeFeedback ? (
-                  <button style={{ ...styles.primaryBtn, opacity: clozeInput.trim() ? 1 : 0.5 }} onClick={submitCloze} disabled={!clozeInput.trim()}>
-                    Prüfen
-                  </button>
-                ) : (
+              {clozeFeedback && (
+                <div style={styles.btnRow}>
                   <button style={styles.primaryBtn} onClick={nextCloze}>
                     {clozeIdx + 1 >= clozeRounds.length ? "Geschafft!" : "Weiter →"}
                   </button>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1864,6 +1869,40 @@ const styles = {
     fontStyle: "italic",
     marginBottom: "24px",
     minHeight: "60px",
+  },
+  clozeOptions: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: "12px",
+    marginBottom: "8px",
+  },
+  clozeOption: {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    padding: "14px 16px",
+    fontSize: "17px",
+    fontWeight: 600,
+    border: "2px solid #C9C2B8",
+    borderRadius: "10px",
+    backgroundColor: "#FDFCFA",
+    color: "#3D3229",
+    fontFamily: "'DM Sans', sans-serif",
+    textAlign: "left",
+    transition: "border-color 0.2s, background-color 0.2s, transform 0.15s",
+  },
+  clozeOptionNum: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "20px",
+    height: "20px",
+    flexShrink: 0,
+    borderRadius: "6px",
+    backgroundColor: "rgba(61,50,41,0.07)",
+    fontSize: "12px",
+    fontWeight: 700,
+    color: "#8A7F72",
   },
   drillNote: {
     fontSize: "11px",
