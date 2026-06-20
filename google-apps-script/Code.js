@@ -34,6 +34,9 @@ function doGet(e) {
       case 'getstreak':
         result = getStreak();
         break;
+      case 'getsentences':
+        result = getSentences();
+        break;
       case 'ping':
         result = { ok: true, timestamp: new Date().toISOString() };
         break;
@@ -375,9 +378,14 @@ function editWord(body) {
   const wordId = body.word_id;
   if (!wordId) return { error: 'word_id is required' };
 
-  const hasSource = typeof body.source_word === 'string' && body.source_word.trim() !== '';
-  const hasTarget = typeof body.target_word === 'string' && body.target_word.trim() !== '';
-  if (!hasSource && !hasTarget) return { error: 'source_word or target_word is required' };
+  const hasSource   = typeof body.source_word       === 'string' && body.source_word.trim()       !== '';
+  const hasTarget   = typeof body.target_word       === 'string' && body.target_word.trim()       !== '';
+  const hasSentence = typeof body.example_sentence  === 'string';
+  const hasEval     = typeof body.sentence_eval     === 'string' && ['up', 'down', ''].includes(body.sentence_eval);
+
+  if (!hasSource && !hasTarget && !hasSentence && !hasEval) {
+    return { error: 'At least one of source_word, target_word, example_sentence, or sentence_eval is required' };
+  }
 
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName('SophiaLingo Database');
   const data = sheet.getDataRange().getValues();
@@ -392,20 +400,26 @@ function editWord(body) {
   }
   if (rowIndex === -1) return { error: 'Word not found: ' + wordId };
 
+  const updated = {};
+
   if (hasSource) {
     sheet.getRange(rowIndex + 1, cols['source_word'] + 1).setValue(body.source_word.trim());
+    updated.source_word = body.source_word.trim();
   }
   if (hasTarget) {
     sheet.getRange(rowIndex + 1, cols['target_word'] + 1).setValue(body.target_word.trim());
+    updated.target_word = body.target_word.trim();
+  }
+  if (hasSentence) {
+    sheet.getRange(rowIndex + 1, cols['example_sentence'] + 1).setValue(body.example_sentence.trim());
+    updated.example_sentence = body.example_sentence.trim();
+  }
+  if (hasEval) {
+    sheet.getRange(rowIndex + 1, cols['sentence_eval'] + 1).setValue(body.sentence_eval);
+    updated.sentence_eval = body.sentence_eval;
   }
 
-  return {
-    word_id: wordId,
-    updated: {
-      ...(hasSource ? { source_word: body.source_word.trim() } : {}),
-      ...(hasTarget ? { target_word: body.target_word.trim() } : {}),
-    },
-  };
+  return { word_id: wordId, updated };
 }
 
 // ============================================================
@@ -624,6 +638,39 @@ function emotionFor(streak, frozen) {
   if (streak <= 59) return '😆';
   if (streak <= 99) return '🤩';
   return '⭐';
+}
+
+// ============================================================
+// getSentences — return all words that have an example sentence
+// ============================================================
+// GET ?action=getSentences
+// Returns every word with a non-empty example_sentence, including
+// the sentence_eval field so callers can filter up/down/unrated.
+
+function getSentences() {
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName('SophiaLingo Database');
+  if (!sheet) return { error: 'Sheet "SophiaLingo Database" not found' };
+
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+
+  const words = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = rowToObject(headers, data[i], i + 1);
+    if (!row.example_sentence) continue;
+    words.push({
+      word_id: row.word_id,
+      source_word: row.source_word,
+      target_word: row.target_word,
+      example_sentence: row.example_sentence,
+      sentence_eval: row.sentence_eval || '',
+      leitner_box: parseInt(row.leitner_box) || 1,
+      times_correct: parseInt(row.times_correct) || 0,
+      times_wrong: parseInt(row.times_wrong) || 0,
+    });
+  }
+
+  return { words, total: words.length };
 }
 
 // ============================================================
