@@ -92,6 +92,75 @@ function checkAnswer(userInput, correctAnswer) {
   return "incorrect";
 }
 
+// ─── Spanish cloze (Lückentext) helpers ───────────────────
+// Spanish-aware normalizer — distinct from the German `normalize` above
+// (which substitutes ä→ae etc.). Here Sophia types a SPANISH word, so we
+// strip Spanish accents, drop punctuation, and collapse whitespace.
+function normalizeEs(str) {
+  return str
+    .toLowerCase()
+    .replace(/[áàâ]/g, "a").replace(/[éèê]/g, "e").replace(/[íìî]/g, "i")
+    .replace(/[óòô]/g, "o").replace(/[úùûü]/g, "u").replace(/ñ/g, "n")
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Mirrors the §8 thresholds, but on Spanish-normalized strings.
+function checkCloze(userInput, answer) {
+  const u = normalizeEs(userInput);
+  const a = normalizeEs(answer);
+  if (!u || !a) return "incorrect";
+  if (u === a) return "correct";
+  const dist = levenshtein(u, a);
+  const threshold = a.length <= 4 ? 1 : a.length <= 8 ? 2 : 3;
+  if (dist <= threshold) return "almost";
+  return "incorrect";
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Build one cloze round from a word: pick a random sentence slot whose text
+// actually contains the source word (case-insensitive), and blank it out.
+// Returns null if no slot contains a matchable surface form (skip the word).
+function buildClozeRound(word) {
+  const sentences = [word.example_sentence, word.example_sentence_2, word.example_sentence_3]
+    .filter(Boolean);
+  // shuffle slots so a multi-sentence word varies which one is shown
+  const shuffled = sentences.sort(() => Math.random() - 0.5);
+  const src = (word.source_word || "").trim();
+  if (!src) return null;
+  const re = new RegExp(escapeRegExp(src), "i");
+  for (const sentence of shuffled) {
+    if (re.test(sentence)) {
+      return {
+        blanked: sentence.replace(re, "_____"),
+        full: sentence,
+        answer: src,
+        leitner_box: word.leitner_box || 1,
+      };
+    }
+  }
+  return null;
+}
+
+// Build a pool of 5–10 rounds. Prefer words in box ≥ 2 (already seen) for a
+// fairer challenge, then fill remaining slots from the rest.
+function buildClozePool(words) {
+  const seen = words.filter((w) => (w.leitner_box || 1) >= 2).sort(() => Math.random() - 0.5);
+  const fresh = words.filter((w) => (w.leitner_box || 1) < 2).sort(() => Math.random() - 0.5);
+  const ordered = [...seen, ...fresh];
+  const rounds = [];
+  for (const w of ordered) {
+    const r = buildClozeRound(w);
+    if (r) rounds.push(r);
+    if (rounds.length >= 10) break;
+  }
+  return rounds;
+}
+
 // ─── Streak emotion ladder (mirrors emotionFor in Code.js) ──
 // Used to project the post-round emotion on the summary screen.
 function emotionFor(streak) {
@@ -206,6 +275,13 @@ export default function SophiaLingo() {
   const [stats, setStats] = useState(null);                // getStats snapshot (box distribution + lifetime accuracy)
   const [sentenceSlots, setSentenceSlots] = useState([]);
   const [hintSlots, setHintSlots] = useState([]);          // per-word hint sentence slot (null = no hint)
+  // ─── Lückentext (cloze) — local BONUS practice, no Leitner/session effects ──
+  const [clozeRounds, setClozeRounds] = useState([]);
+  const [clozeIdx, setClozeIdx] = useState(0);
+  const [clozeInput, setClozeInput] = useState("");
+  const [clozeFeedback, setClozeFeedback] = useState(null); // null | { result }
+  const [clozeLoading, setClozeLoading] = useState(false);
+  const clozeInputRef = useRef(null);
 
   // Drain offline queue on load and when connection returns
   useEffect(() => {
@@ -274,6 +350,59 @@ export default function SophiaLingo() {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [current, phase, feedback]);
+
+  // Focus the cloze input when a new round appears
+  useEffect(() => {
+    if (phase === "luecke" && !clozeFeedback && clozeInputRef.current) {
+      setTimeout(() => clozeInputRef.current?.focus(), 100);
+    }
+  }, [clozeIdx, phase, clozeFeedback]);
+
+  // ─── Lückentext handlers ──────────────────────────────────
+  // Enter cloze mode from Summary. Prefer the richer getSentences pool;
+  // fall back to the words already fetched for the quiz. Never touches Leitner.
+  const startCloze = useCallback(async () => {
+    setClozeLoading(true);
+    let pool = [];
+    try {
+      const res = await fetch(`${API_URL}?action=getSentences`);
+      const data = await res.json();
+      if (data.words && data.words.length) pool = data.words;
+    } catch { /* fall through to quiz words */ }
+    if (!pool.length) pool = words;
+    const rounds = buildClozePool(pool);
+    setClozeLoading(false);
+    if (!rounds.length) return; // nothing usable — stay on summary
+    setShowConfetti(false);
+    setClozeRounds(rounds);
+    setClozeIdx(0);
+    setClozeInput("");
+    setClozeFeedback(null);
+    setPhase("luecke");
+  }, [words]);
+
+  const submitCloze = useCallback(() => {
+    if (!clozeInput.trim() || clozeFeedback) return;
+    const round = clozeRounds[clozeIdx];
+    setClozeFeedback({ result: checkCloze(clozeInput, round.answer) });
+  }, [clozeInput, clozeFeedback, clozeRounds, clozeIdx]);
+
+  const nextCloze = useCallback(() => {
+    if (clozeIdx + 1 >= clozeRounds.length) {
+      setPhase("summary");
+      return;
+    }
+    setClozeIdx((i) => i + 1);
+    setClozeInput("");
+    setClozeFeedback(null);
+  }, [clozeIdx, clozeRounds]);
+
+  const handleClozeKey = (e) => {
+    if (e.key === "Enter") {
+      if (!clozeFeedback) submitCloze();
+      else nextCloze();
+    }
+  };
 
   const submitAnswer = useCallback(() => {
     if (!input.trim() || feedback) return;
@@ -396,6 +525,12 @@ export default function SophiaLingo() {
             </div>
           ) : (
             <div style={styles.subtitle}>Spanisch → Deutsch</div>
+          )}
+          {streakAtLoad && streakAtLoad.streak >= 1 && (
+            <div style={styles.freezeCounter}>
+              <span>❄️</span>
+              <span style={styles.freezeNum}>{streakAtLoad.freezes}/1</span>
+            </div>
           )}
         </div>
 
@@ -743,8 +878,11 @@ export default function SophiaLingo() {
               )}
             </div>
 
-            {/* Secondary navigation (sibling screens add their buttons here) */}
-            <div style={styles.secondaryBtnRow}>
+            {/* Secondary practice modes (sibling screens land here too) */}
+            <div style={styles.secondaryRow}>
+              <button style={styles.secondaryBtn} onClick={startCloze} disabled={clozeLoading}>
+                {clozeLoading ? "Lädt…" : "✏️ Lückentext"}
+              </button>
               <button style={styles.secondaryBtn} onClick={() => setPhase("fortschritt")}>
                 📊 Mein Fortschritt
               </button>
@@ -806,6 +944,102 @@ export default function SophiaLingo() {
             <button style={{ ...styles.secondaryBtn, marginTop: "28px" }} onClick={() => setPhase("summary")}>
               Zurück
             </button>
+          </div>
+        )}
+
+        {/* Lückentext (cloze) — BONUS practice, no Leitner/session side effects */}
+        {phase === "luecke" && (
+          <div style={styles.quizWrap}>
+            <div style={styles.clozeTopRow}>
+              <button style={styles.backBtn} onClick={() => setPhase("summary")}>← Zurück</button>
+              <span style={styles.counter}>{clozeIdx + 1} / {clozeRounds.length}</span>
+            </div>
+
+            <div style={styles.card} key={clozeIdx}>
+              <div style={styles.clozeLabel}>Lückentext · Welches Wort fehlt?</div>
+
+              {!clozeFeedback ? (
+                <p style={styles.clozeSentence}>{clozeRounds[clozeIdx].blanked}</p>
+              ) : (
+                <p style={styles.clozeSentence}>
+                  {clozeRounds[clozeIdx].full.split(" ").map((w, i) => {
+                    const isAnswer = normalizeEs(w) === normalizeEs(clozeRounds[clozeIdx].answer);
+                    return (
+                      <span
+                        key={i}
+                        style={{
+                          display: "inline-block",
+                          opacity: 0,
+                          animation: "wordIn 0.35s ease forwards",
+                          animationDelay: `${i * 0.1}s`,
+                          marginRight: "0.25em",
+                          fontWeight: isAnswer ? 700 : 400,
+                          color: isAnswer ? "#1E7D60" : "#3D3229",
+                        }}
+                      >
+                        {w}
+                      </span>
+                    );
+                  })}
+                </p>
+              )}
+
+              <div style={styles.inputWrap}>
+                <input
+                  ref={clozeInputRef}
+                  type="text"
+                  value={clozeInput}
+                  onChange={(e) => setClozeInput(e.target.value)}
+                  onKeyDown={handleClozeKey}
+                  placeholder="Fehlendes Wort…"
+                  disabled={!!clozeFeedback}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
+                  style={{
+                    ...styles.input,
+                    borderColor: clozeFeedback
+                      ? clozeFeedback.result === "correct" ? "#2A9D8F"
+                        : clozeFeedback.result === "almost" ? "#F4A261"
+                        : "#E76F51"
+                      : "#C9C2B8",
+                    backgroundColor: clozeFeedback
+                      ? clozeFeedback.result === "correct" ? "#F0FAF7"
+                        : clozeFeedback.result === "almost" ? "#FFF8EE"
+                        : "#FEF1EE"
+                      : "#FDFCFA",
+                  }}
+                />
+              </div>
+
+              {clozeFeedback && (
+                <div style={{ ...styles.feedbackBox, animation: "slideUp 0.3s ease" }}>
+                  {clozeFeedback.result === "correct" && (
+                    <div style={{ ...styles.feedbackLabel, color: "#1E7D60" }}>✓ Richtig!</div>
+                  )}
+                  {clozeFeedback.result === "almost" && (
+                    <div style={{ ...styles.feedbackLabel, color: "#B87A2B" }}>≈ Fast…</div>
+                  )}
+                  {clozeFeedback.result === "incorrect" && (
+                    <div style={{ ...styles.feedbackLabel, color: "#C25636" }}>✗ Nicht ganz</div>
+                  )}
+                  <div style={styles.correctAnswer}>{clozeRounds[clozeIdx].answer}</div>
+                </div>
+              )}
+
+              <div style={styles.btnRow}>
+                {!clozeFeedback ? (
+                  <button style={{ ...styles.primaryBtn, opacity: clozeInput.trim() ? 1 : 0.5 }} onClick={submitCloze} disabled={!clozeInput.trim()}>
+                    Prüfen
+                  </button>
+                ) : (
+                  <button style={styles.primaryBtn} onClick={nextCloze}>
+                    {clozeIdx + 1 >= clozeRounds.length ? "Geschafft!" : "Weiter →"}
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -902,6 +1136,7 @@ const styles = {
     flexDirection: "column",
   },
   header: {
+    position: "relative",
     textAlign: "center",
     marginBottom: "32px",
     paddingTop: "12px",
@@ -933,6 +1168,20 @@ const styles = {
     fontWeight: 700,
     color: "#3D3229",
     letterSpacing: "-0.3px",
+  },
+  freezeCounter: {
+    position: "absolute",
+    top: "12px",
+    right: "0",
+    display: "flex",
+    alignItems: "center",
+    gap: "4px",
+    fontSize: "14px",
+    color: "#8A7F72",
+    lineHeight: 1,
+  },
+  freezeNum: {
+    fontWeight: 600,
   },
   center: {
     flex: 1,
@@ -1158,16 +1407,16 @@ const styles = {
     color: "#6B5F52",
     textAlign: "right",
   },
-  secondaryBtnRow: {
+  secondaryRow: {
     display: "flex",
-    flexWrap: "wrap",
     justifyContent: "center",
-    gap: "10px",
-    marginTop: "28px",
+    gap: "12px",
+    marginTop: "20px",
+    flexWrap: "wrap",
   },
   secondaryBtn: {
-    padding: "11px 22px",
-    fontSize: "14px",
+    padding: "12px 24px",
+    fontSize: "15px",
     fontWeight: 600,
     color: "#6B5F52",
     backgroundColor: "#FDFCFA",
@@ -1241,6 +1490,40 @@ const styles = {
     textTransform: "uppercase",
     letterSpacing: "0.5px",
     marginTop: "6px",
+  },
+  clozeTopRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: "20px",
+  },
+  backBtn: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "14px",
+    fontWeight: 600,
+    color: "#8A7F72",
+    fontFamily: "'DM Sans', sans-serif",
+    padding: "4px 0",
+  },
+  clozeLabel: {
+    fontSize: "12px",
+    color: "#B87A2B",
+    fontWeight: 600,
+    letterSpacing: "0.5px",
+    textTransform: "uppercase",
+    textAlign: "center",
+    marginBottom: "20px",
+  },
+  clozeSentence: {
+    fontSize: "21px",
+    lineHeight: 1.55,
+    color: "#3D3229",
+    textAlign: "center",
+    fontStyle: "italic",
+    marginBottom: "24px",
+    minHeight: "60px",
   },
   footer: {
     textAlign: "center",
