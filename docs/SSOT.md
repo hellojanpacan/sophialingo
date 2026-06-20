@@ -125,6 +125,45 @@ date_added | source | example_sentence | sentence_eval
 session_id | date | words_tested | correct | score_pct | completed
 ```
 
+### Streak & Freeze
+
+Streak state is **derived** by replaying the `Sessions` sheet — no schema change, no new sheet, no
+server-side mutation. `getStreak` is read-only.
+
+- **Streak day** = ≥1 completed round (one `logSession`) on a calendar day. `session_id` is
+  `s_YYYYMMDD` (shared per day), so rounds-per-day = number of `Sessions` rows sharing a `date`.
+- **Streak Freeze (earned)**: ≥3 rounds in a single day earns 1 freeze. Max 1 stored (no stacking).
+  A freeze auto-covers exactly one missed day; a second consecutive miss breaks the streak.
+- **Today is not over**: an unpracticed today never breaks the streak or consumes a freeze. The
+  `frozen` flag is only surfaced when she has a covered gap *and* hasn't yet practiced today
+  (`frozen && sessions_today === 0`); practicing today thaws it (🧊 → 🔥).
+- **Day boundaries** use `Session.getScriptTimeZone()` (Europe/Vienna), consistent with all other
+  date logic. The replay iterates day-by-day from a noon-anchored cursor to stay DST-safe.
+
+`getStreak` returns: `{ streak, frozen, freezes, sessions_today, longest, emotion, today }`. The
+`emotion` field is the canonical emoji (computed in `Code.js` so the notification cron consumes it
+directly). The frontend mirrors the ladder in `emotionFor` (`SophiaLingo.jsx`) to project the
+post-round emotion on the summary.
+
+**Emotion ladder** (by streak length; `frozen` overrides with 🥶):
+
+| Streak | 0 | 1 | 2–3 | 4–6 | 7–13 | 14–29 | 30–59 | 60–99 | 100+ |
+|--------|---|---|-----|-----|------|-------|-------|-------|------|
+| Emoji  | — | 😐 | 🙂 | 😊 | 🤠 | 😄 | 😆 | 🤩 | ⭐ |
+
+### Streak notifications (Vercel Cron → Ntfy)
+
+A serverless function `api/streak-reminder.js` (co-located in this repo, deployed with the app on
+Vercel) runs daily via `vercel.json` cron. It reads `getStreak`, and — only if Sophia hasn't
+practiced today (`sessions_today === 0`) — pushes a short Ntfy notification: urgent 🧊 warning when
+`frozen`, normal 🔥 + count + emotion when the streak is intact, or a gentle nudge at streak 0.
+
+- This is an **auxiliary notification sidecar** — it does **not** change the backend invariant
+  (vocabulary/session data stays in Google Apps Script + Sheets). It is read-only against `getStreak`.
+- Env vars (Vercel settings): `APPS_SCRIPT_URL`, `NTFY_TOPIC`, `CRON_SECRET`.
+- Cron runs in **UTC, no DST**: `0 18 * * *` ≈ 19:00 Vienna (winter) / 20:00 (summer). Vercel Hobby
+  allows one daily cron; a second (morning) ping needs Pro or an external scheduler.
+
 ### Leitner intervals (hardcoded in `Code.js`)
 
 | From box | To box | Interval |
@@ -159,6 +198,7 @@ Group A fills the batch first; Group B fills remaining slots. Excluded: active w
 |--------|---------|
 | `?action=getWords&limit=10` | Fetch today's due words |
 | `?action=getStats` | Aggregate stats (box distribution, lifetime accuracy) |
+| `?action=getStreak` | Current streak + freeze state (derived from Sessions) |
 | `?action=ping` | Health check |
 
 **POST** (via `doPost`, JSON body):
@@ -205,7 +245,8 @@ loading
 - Progress dots: green (correct), orange (almost), red (incorrect), gray (pending)
 - If total due > 10: shows "· N insgesamt fällig" counter
 - Confetti at ≥70% accuracy
-- Summary emoji: 🏆 ≥80% · 💪 50–79% · 📚 <50%
+- Header: shows 🔥/🧊 + streak count + emotion emoji when streak ≥ 1 (replaces "Spanisch → Deutsch"); falls back to "Spanisch → Deutsch" at streak 0 or if `getStreak` fails. Flame has a subtle `flameFlicker` animation (not the frozen 🧊).
+- Summary leads with the projected streak (🔥 + days + emotion) and a contextual freeze line; the score tier emoji (🏆 ≥80% · 💪 50–79% · 📚 <50%) is the fallback when streak data is unavailable. See §6 "Streak & Freeze".
 
 ---
 
