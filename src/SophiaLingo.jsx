@@ -378,6 +378,12 @@ export default function SophiaLingo() {
           ) : (
             <div style={styles.subtitle}>Spanisch → Deutsch</div>
           )}
+          {streakAtLoad && streakAtLoad.streak >= 1 && (
+            <div style={styles.freezeCounter}>
+              <span>❄️</span>
+              <span style={styles.freezeNum}>{streakAtLoad.freezes}/1</span>
+            </div>
+          )}
         </div>
 
         {/* Loading */}
@@ -819,6 +825,7 @@ const styles = {
     flexDirection: "column",
   },
   header: {
+    position: "relative",
     textAlign: "center",
     marginBottom: "32px",
     paddingTop: "12px",
@@ -850,6 +857,20 @@ const styles = {
     fontWeight: 700,
     color: "#3D3229",
     letterSpacing: "-0.3px",
+  },
+  freezeCounter: {
+    position: "absolute",
+    top: "12px",
+    right: "0",
+    display: "flex",
+    alignItems: "center",
+    gap: "4px",
+    fontSize: "14px",
+    color: "#8A7F72",
+    lineHeight: 1,
+  },
+  freezeNum: {
+    fontWeight: 600,
   },
   center: {
     flex: 1,

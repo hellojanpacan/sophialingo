@@ -249,7 +249,7 @@ loading
 - If total due > 10: shows "· N insgesamt fällig" counter
 - Confetti at ≥70% accuracy
 - Hint: on the word card (pre-answer), a "💡 Tipp" button appears when the word has ≥1 example sentence. It opens a hint sentence screen (same word-by-word reveal as the post-eval one, no 👍👎); tapping anywhere returns to the word card with the input refocused. The hint prefers a *different* sentence slot than the post-eval reveal (falls back to the same if only one exists). Using a hint has no scoring/Leitner effect and is not tracked. Frontend-only — uses sentence data already returned by `getWords`.
-- Header: shows 🔥/🧊 + streak count + emotion emoji when streak ≥ 1 (replaces "Spanisch → Deutsch"); falls back to "Spanisch → Deutsch" at streak 0 or if `getStreak` fails. Flame has a subtle `flameFlicker` animation (not the frozen 🧊).
+- Header: shows 🔥/🧊 + streak count + emotion emoji when streak ≥ 1 (replaces "Spanisch → Deutsch"); falls back to "Spanisch → Deutsch" at streak 0 or if `getStreak` fails. Flame has a subtle `flameFlicker` animation (not the frozen 🧊). When streak ≥ 1, a banked-freeze counter (❄️ + `freezes`/1, e.g. `❄️ 0/1`) sits in the top-right corner so the answer to "do I have a streak freeze?" is always visible.
 - Summary leads with the projected streak (🔥 + days + emotion) and a contextual freeze line; the score tier emoji (🏆 ≥80% · 💪 50–79% · 📚 <50%) is the fallback when streak data is unavailable. See §6 "Streak & Freeze".
 
 ---
