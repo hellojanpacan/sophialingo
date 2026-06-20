@@ -199,8 +199,10 @@ export default function SophiaLingo() {
   const [editing, setEditing] = useState(null);   // null | "source" | "target"
   const [editValue, setEditValue] = useState("");
   const [showSentence, setShowSentence] = useState(false);
+  const [showHint, setShowHint] = useState(false);        // pre-answer hint sentence screen
   const [streakAtLoad, setStreakAtLoad] = useState(null);  // streak snapshot at app open
   const [sentenceSlots, setSentenceSlots] = useState([]);
+  const [hintSlots, setHintSlots] = useState([]);          // per-word hint sentence slot (null = no hint)
 
   // Drain offline queue on load and when connection returns
   useEffect(() => {
@@ -224,6 +226,16 @@ export default function SophiaLingo() {
           return available.length ? available[Math.floor(Math.random() * available.length)] : 1;
         });
         setSentenceSlots(slots);
+        // Hint sentence: prefer a slot different from the post-eval one so Sophia sees
+        // two distinct sentences per word; fall back to the same slot if only one exists.
+        const hints = data.words.map((w, i) => {
+          const available = [1, 2, 3].filter((s) => (s === 1 ? w.example_sentence : w[`example_sentence_${s}`]));
+          if (!available.length) return null;
+          const others = available.filter((s) => s !== slots[i]);
+          const pool = others.length ? others : available;
+          return pool[Math.floor(Math.random() * pool.length)];
+        });
+        setHintSlots(hints);
         setPhase("quiz");
       })
       .catch((err) => { setError(err.message); setPhase("error"); });
@@ -273,6 +285,7 @@ export default function SophiaLingo() {
       return;
     }
     setShowSentence(false);
+    setShowHint(false);
     if (current + 1 >= words.length) {
       // Log session
       const correct = results.filter((r) => r === "correct").length + results.filter((r) => r === "almost").length;
@@ -286,6 +299,11 @@ export default function SophiaLingo() {
       setFeedback(null);
     }
   }, [current, words, results, showSentence, sentenceSlots]);
+
+  const dismissHint = useCallback(() => {
+    setShowHint(false);
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }, []);
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
@@ -452,8 +470,36 @@ export default function SophiaLingo() {
               );
             })()}
 
+            {/* Hint sentence (pre-answer) */}
+            {showHint && (() => {
+              const slot = hintSlots[current] || 1;
+              const sentence = slot === 1 ? words[current].example_sentence : words[current][`example_sentence_${slot}`];
+              return (
+                <div style={styles.sentenceScreen} onClick={dismissHint}>
+                  <span style={styles.hintLabel}>💡 Tipp</span>
+                  <p style={styles.sentenceText}>
+                    {sentence.split(" ").map((word, i) => (
+                      <span
+                        key={i}
+                        style={{
+                          display: "inline-block",
+                          opacity: 0,
+                          animation: "wordIn 0.35s ease forwards",
+                          animationDelay: `${i * 0.1}s`,
+                          marginRight: "0.25em",
+                        }}
+                      >
+                        {word}
+                      </span>
+                    ))}
+                  </p>
+                  <span style={styles.sentenceTapHint}>Tippe um fortzufahren</span>
+                </div>
+              );
+            })()}
+
             {/* Word card */}
-            {!showSentence && <div style={styles.card} key={current}>
+            {!showSentence && !showHint && <div style={styles.card} key={current}>
               <div style={styles.cardMeta}>
                 <BoxBadge box={words[current].leitner_box} />
               </div>
@@ -559,9 +605,16 @@ export default function SophiaLingo() {
               {/* Buttons */}
               <div style={styles.btnRow}>
                 {!feedback ? (
-                  <button style={{ ...styles.primaryBtn, opacity: input.trim() ? 1 : 0.5 }} onClick={submitAnswer} disabled={!input.trim()}>
-                    Prüfen
-                  </button>
+                  <>
+                    {hintSlots[current] && (
+                      <button style={styles.hintBtn} onClick={() => setShowHint(true)}>
+                        💡 Tipp
+                      </button>
+                    )}
+                    <button style={{ ...styles.primaryBtn, opacity: input.trim() ? 1 : 0.5 }} onClick={submitAnswer} disabled={!input.trim()}>
+                      Prüfen
+                    </button>
+                  </>
                 ) : (
                   <button style={styles.primaryBtn} onClick={nextWord}>
                     {current + 1 >= words.length ? "Ergebnis anzeigen" : "Weiter →"}
@@ -912,7 +965,28 @@ const styles = {
   btnRow: {
     display: "flex",
     justifyContent: "center",
+    gap: "12px",
     marginTop: "16px",
+  },
+  hintBtn: {
+    padding: "12px 22px",
+    fontSize: "15px",
+    fontWeight: 600,
+    color: "#B87A2B",
+    backgroundColor: "#FEF3E2",
+    border: "none",
+    borderRadius: "10px",
+    cursor: "pointer",
+    fontFamily: "'DM Sans', sans-serif",
+    transition: "transform 0.15s, box-shadow 0.15s",
+  },
+  hintLabel: {
+    fontSize: "12px",
+    color: "#B87A2B",
+    fontWeight: 600,
+    letterSpacing: "0.5px",
+    textTransform: "uppercase",
+    marginBottom: "20px",
   },
   primaryBtn: {
     padding: "12px 36px",
