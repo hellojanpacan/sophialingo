@@ -132,8 +132,9 @@ server-side mutation. `getStreak` is read-only.
 
 - **Streak day** = ≥1 completed round (one `logSession`) on a calendar day. `session_id` is
   `s_YYYYMMDD` (shared per day), so rounds-per-day = number of `Sessions` rows sharing a `date`.
-- **Streak Freeze (earned)**: ≥3 rounds in a single day earns 1 freeze. Max 1 stored (no stacking).
-  A freeze auto-covers exactly one missed day; a second consecutive miss breaks the streak.
+- **Streak Freeze (earned)**: ≥3 rounds in a single day earns 1 freeze (at most one per day). Max 2
+  stored (`MAX_FREEZES` in `Code.js` and `SophiaLingo.jsx`). Each freeze auto-covers exactly one missed
+  day; with 2 banked, two consecutive misses are covered and a third breaks the streak.
 - **Today is not over**: an unpracticed today never breaks the streak or consumes a freeze. The
   `frozen` flag is only surfaced when she has a covered gap *and* hasn't yet practiced today
   (`frozen && sessions_today === 0`); practicing today thaws it (🧊 → 🔥).
@@ -261,7 +262,7 @@ loading
 - If total due > 10: shows "· N insgesamt fällig" counter
 - Confetti at ≥70% accuracy
 - Hint: on the word card (pre-answer), a "💡 Tipp" button appears when the word has ≥1 example sentence. It opens a hint sentence screen (same word-by-word reveal as the post-eval one, no 👍👎); tapping anywhere returns to the word card with the input refocused. The hint prefers a *different* sentence slot than the post-eval reveal (falls back to the same if only one exists). Using a hint has no scoring/Leitner effect and is not tracked. Frontend-only — uses sentence data already returned by `getWords`.
-- Header: shows 🔥/🧊 + streak count + emotion emoji when streak ≥ 1 (replaces "Spanisch → Deutsch"); falls back to "Spanisch → Deutsch" at streak 0 or if `getStreak` fails. Flame has a subtle `flameFlicker` animation (not the frozen 🧊). When streak ≥ 1, a banked-freeze counter (❄️ + `freezes`/1, e.g. `❄️ 0/1`) sits in the top-right corner so the answer to "do I have a streak freeze?" is always visible.
+- Header: shows 🔥/🧊 + streak count + emotion emoji when streak ≥ 1 (replaces "Spanisch → Deutsch"); falls back to "Spanisch → Deutsch" at streak 0 or if `getStreak` fails. Flame has a subtle `flameFlicker` animation (not the frozen 🧊). When streak ≥ 1, a banked-freeze counter (❄️ + `freezes`/`MAX_FREEZES`, e.g. `❄️ 1/2`) sits in the top-right corner so the answer to "do I have a streak freeze?" is always visible.
 - Summary leads with the projected streak (🔥 + days + emotion) and a contextual freeze line; the score tier emoji (🏆 ≥80% · 💪 50–79% · 📚 <50%) is the fallback when streak data is unavailable. See §6 "Streak & Freeze".
 
 ---

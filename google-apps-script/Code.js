@@ -21,6 +21,10 @@ const LEITNER_INTERVALS = {
 const RETIRED_BOX = 6;
 const RETIRED_NEXT_REVIEW = '2999-12-31';
 
+// Max streak freezes that can be banked at once (one earned per day with >=3 rounds).
+// Keep in sync with MAX_FREEZES in src/SophiaLingo.jsx.
+const MAX_FREEZES = 2;
+
 // ============================================================
 // Entry points — GET and POST
 // ============================================================
@@ -587,8 +591,9 @@ function getStats() {
 //
 // Rules:
 //   - A "streak day" = >=1 round completed that calendar day.
-//   - Earning a freeze: >=3 rounds in a single day earns 1 freeze (max 1, no stacking).
-//   - A freeze auto-covers exactly one missed day; a second consecutive miss breaks the streak.
+//   - Earning a freeze: >=3 rounds in a single day earns 1 freeze (max MAX_FREEZES stored).
+//   - Each freeze auto-covers exactly one missed day; with 2 banked, two consecutive misses are
+//     covered and a third breaks the streak.
 //   - Today is handled separately: an unpracticed today must NOT break or consume a freeze.
 //
 // Returns: { streak, frozen, freezes, sessions_today, longest, emotion, today }
@@ -628,7 +633,7 @@ function getStreak() {
     if (rounds >= 1) {
       streak++;
       frozen = false;
-      if (rounds >= 3 && freezes < 1) freezes = 1;
+      if (rounds >= 3 && freezes < MAX_FREEZES) freezes++;
       if (streak > longest) longest = streak;
     } else {
       if (freezes >= 1) { freezes--; frozen = true; }
@@ -642,7 +647,7 @@ function getStreak() {
   if (todaySessions >= 1) {
     streak++;
     frozen = false;
-    if (todaySessions >= 3 && freezes < 1) freezes = 1;
+    if (todaySessions >= 3 && freezes < MAX_FREEZES) freezes++;
     if (streak > longest) longest = streak;
   }
   if (streak > longest) longest = streak; // defensive
