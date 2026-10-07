@@ -1467,7 +1467,7 @@ const styles = {
   },
   shell: {
     minHeight: "100vh",
-    background: "#DFF5DC",
+    background: "linear-gradient(168deg, #F5F0E8 0%, #EDE6DA 40%, #E8DFD0 100%)",
     fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
     color: "#3D3229",
     padding: "0",
