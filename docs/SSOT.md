@@ -41,7 +41,7 @@
 These are deliberate product decisions. Do not change them without explicit instruction.
 
 ### 4.1 Leitner Box is the product
-All word progression flows through the Leitner system. Box assignment, intervals, and reset-on-wrong are not implementation details — they are the core mechanic. Never bypass, abstract away, or replace the Leitner logic.
+All word progression flows through the Leitner system. Box assignment, intervals, drop-one-box-on-wrong, and retirement are not implementation details — they are the core mechanic. Never bypass, abstract away, or replace the Leitner logic.
 
 ### 4.2 German UI always
 Every label, button, message, and error text must stay in German. This is not just a preference — the UI language matching Sophia's native language is an intentional immersion choice. Examples: "Prüfen", "Weiter →", "Nächste Runde", "Wörter werden geladen…"
@@ -132,8 +132,9 @@ server-side mutation. `getStreak` is read-only.
 
 - **Streak day** = ≥1 completed round (one `logSession`) on a calendar day. `session_id` is
   `s_YYYYMMDD` (shared per day), so rounds-per-day = number of `Sessions` rows sharing a `date`.
-- **Streak Freeze (earned)**: ≥3 rounds in a single day earns 1 freeze. Max 1 stored (no stacking).
-  A freeze auto-covers exactly one missed day; a second consecutive miss breaks the streak.
+- **Streak Freeze (earned)**: ≥3 rounds in a single day earns 1 freeze (at most one per day). Max 2
+  stored (`MAX_FREEZES` in `Code.js` and `SophiaLingo.jsx`). Each freeze auto-covers exactly one missed
+  day; with 2 banked, two consecutive misses are covered and a third breaks the streak.
 - **Today is not over**: an unpracticed today never breaks the streak or consumes a freeze. The
   `frozen` flag is only surfaced when she has a covered gap *and* hasn't yet practiced today
   (`frozen && sessions_today === 0`); practicing today thaws it (🧊 → 🔥).
@@ -166,14 +167,26 @@ practiced today (`sessions_today === 0`) — pushes a short Ntfy notification: u
 
 ### Leitner intervals (hardcoded in `Code.js`)
 
-| From box | To box | Interval |
-|----------|--------|----------|
-| 1 | 2 | 1 day |
-| 2 | 3 | 3 days |
-| 3 | 4 | 7 days |
-| 4 | 5 | 14 days |
-| 5 | 5 | 30 days (mastered) |
-| Any | 1 | tomorrow (wrong answer) |
+A word sitting in box N is next due `INTERVALS[N]` days after its last answer.
+
+| Box | Interval |
+|-----|----------|
+| 1 | 1 day |
+| 2 | 3 days |
+| 3 | 7 days |
+| 4 | 14 days |
+| 5 | 30 days |
+| 6 (retired / "Gemeistert") | never — `next_review = 2999-12-31` |
+
+| Answer | Result |
+|--------|--------|
+| Correct (or "almost") in box 1–4 | box + 1, due after the new box's interval |
+| Correct (or "almost") in box 5 | **retired**: box 6, never selected by `getWords` again |
+| Wrong in box 2–5 | box − 1, due after the new box's interval |
+| Wrong in box 1 | stays in box 1, due tomorrow |
+
+Retired words keep their history, still count in stats (shown as "Gemeistert"), and remain in the
+practice-only bonus modes (Lückentext, Nemesis drill), which never touch Leitner state.
 
 ### Word selection algorithm (`getWords` in `Code.js`)
 
@@ -249,7 +262,7 @@ loading
 - If total due > 10: shows "· N insgesamt fällig" counter
 - Confetti at ≥70% accuracy
 - Hint: on the word card (pre-answer), a "💡 Tipp" button appears when the word has ≥1 example sentence. It opens a hint sentence screen (same word-by-word reveal as the post-eval one, no 👍👎); tapping anywhere returns to the word card with the input refocused. The hint prefers a *different* sentence slot than the post-eval reveal (falls back to the same if only one exists). Using a hint has no scoring/Leitner effect and is not tracked. Frontend-only — uses sentence data already returned by `getWords`.
-- Header: shows 🔥/🧊 + streak count + emotion emoji when streak ≥ 1 (replaces "Spanisch → Deutsch"); falls back to "Spanisch → Deutsch" at streak 0 or if `getStreak` fails. Flame has a subtle `flameFlicker` animation (not the frozen 🧊). When streak ≥ 1, a banked-freeze counter (❄️ + `freezes`/1, e.g. `❄️ 0/1`) sits in the top-right corner so the answer to "do I have a streak freeze?" is always visible.
+- Header: shows 🔥/🧊 + streak count + emotion emoji when streak ≥ 1 (replaces "Spanisch → Deutsch"); falls back to "Spanisch → Deutsch" at streak 0 or if `getStreak` fails. Flame has a subtle `flameFlicker` animation (not the frozen 🧊). When streak ≥ 1, a banked-freeze counter (❄️ + `freezes`/`MAX_FREEZES`, e.g. `❄️ 1/2`) sits in the top-right corner so the answer to "do I have a streak freeze?" is always visible.
 - Summary leads with the projected streak (🔥 + days + emotion) and a contextual freeze line; the score tier emoji (🏆 ≥80% · 💪 50–79% · 📚 <50%) is the fallback when streak data is unavailable. See §6 "Streak & Freeze".
 
 ---
@@ -283,6 +296,7 @@ Function `checkAnswer()` in `src/SophiaLingo.jsx`.
 | 3 (teal) | `#E8F5F0` | `#1E7D60` |
 | 4 (blue) | `#E3F0FC` | `#2563A8` |
 | 5 (purple) | `#EDE9FE` | `#6D48C4` |
+| 6 (sage, retired) | `#E9EFE6` | `#4F6B3F` |
 
 ### Colors — answer feedback
 

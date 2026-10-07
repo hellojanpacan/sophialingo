@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
-const API_URL = "https://script.google.com/macros/s/AKfycbwOnch7in0KD4ktQVGZW-XLhyw2Va8DT2sgqhghpRlxrKkruUDYcrhQlYo9kcAnmNI-/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxBQ6ICK3oTh91rjIJqgtkxcRw6HhUAup74bKp8_fCaFWW0YZGSNVG67LphcLuMP3Nd/exec";
 
 // ─── Offline POST queue ────────────────────────────────────
 const QUEUE_KEY = "sl_queue";
@@ -217,6 +217,9 @@ function Confetti({ count = 40 }) {
   return <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none", zIndex: 999, overflow: "hidden" }}>{pieces}</div>;
 }
 
+// Max streak freezes that can be banked at once. Keep in sync with MAX_FREEZES in Code.js.
+const MAX_FREEZES = 2;
+
 // ─── Leitner box palette (SSOT Design System) ──────────────
 const boxColors = {
   1: { bg: "#FDEAE4", text: "#C25636" },
@@ -224,6 +227,7 @@ const boxColors = {
   3: { bg: "#E8F5F0", text: "#1E7D60" },
   4: { bg: "#E3F0FC", text: "#2563A8" },
   5: { bg: "#EDE9FE", text: "#6D48C4" },
+  6: { bg: "#E9EFE6", text: "#4F6B3F" }, // retired / gemeistert
 };
 
 // ─── Box badge ─────────────────────────────────────────────
@@ -231,7 +235,7 @@ function BoxBadge({ box }) {
   const c = boxColors[box] || boxColors[1];
   return (
     <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: "12px", fontSize: "12px", fontWeight: 600, backgroundColor: c.bg, color: c.text, letterSpacing: "0.3px" }}>
-      Box {box}
+      {box >= 6 ? "Gemeistert" : `Box ${box}`}
     </span>
   );
 }
@@ -658,7 +662,7 @@ export default function SophiaLingo() {
           {streakAtLoad && streakAtLoad.streak >= 1 && (
             <div style={styles.freezeCounter}>
               <span>❄️</span>
-              <span style={styles.freezeNum}>{streakAtLoad.freezes}/1</span>
+              <span style={styles.freezeNum}>{streakAtLoad.freezes}/{MAX_FREEZES}</span>
             </div>
           )}
         </div>
@@ -929,11 +933,13 @@ export default function SophiaLingo() {
               if (displayedStreak < 1) return fallback;               // defensive — don't rub it in
 
               const thawed = s.sessions_today === 0 && s.frozen && s.streak >= 1;
-              const freezeEarned = s.freezes === 0 && newSessionsToday >= 3;
+              // s.freezes already includes a freeze earned earlier today (>=3 rounds), so only the
+              // round that crosses the 3-round line (2 -> 3) can earn one, and only below the cap.
+              const freezeEarned = s.freezes < MAX_FREEZES && s.sessions_today === 2;
               let line = null;
               if (thawed) line = "Dein Streak war eingefroren — gerettet! 🧊";
               else if (freezeEarned) line = "Streak-Freeze verdient! ❄️";
-              else if (s.freezes === 0 && newSessionsToday < 3) line = `Noch ${3 - newSessionsToday} Runden für einen Streak-Freeze ❄️`;
+              else if (s.freezes < MAX_FREEZES && newSessionsToday < 3) line = `Noch ${3 - newSessionsToday} Runden für einen Streak-Freeze ❄️`;
 
               return (
                 <>
@@ -1036,13 +1042,13 @@ export default function SophiaLingo() {
                   <p style={styles.progressSectionTitle}>Leitner-Boxen</p>
                   {(() => {
                     const dist = stats.box_distribution || {};
-                    const max = Math.max(1, ...[1, 2, 3, 4, 5].map((b) => dist[b] || 0));
-                    return [1, 2, 3, 4, 5].map((b) => {
+                    const max = Math.max(1, ...[1, 2, 3, 4, 5, 6].map((b) => dist[b] || 0));
+                    return [1, 2, 3, 4, 5, 6].map((b) => {
                       const count = dist[b] || 0;
                       const c = boxColors[b];
                       return (
                         <div key={b} style={styles.barRow}>
-                          <span style={{ ...styles.barBoxLabel, color: c.text }}>{b}</span>
+                          <span style={{ ...styles.barBoxLabel, color: c.text }}>{b === 6 ? "★" : b}</span>
                           <div style={styles.barTrack}>
                             <div style={{
                               ...styles.barFill,
