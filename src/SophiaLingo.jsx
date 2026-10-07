@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
-const API_URL = "https://script.google.com/macros/s/AKfycbxBQ6ICK3oTh91rjIJqgtkxcRw6HhUAup74bKp8_fCaFWW0YZGSNVG67LphcLuMP3Nd/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbwOnch7in0KD4ktQVGZW-XLhyw2Va8DT2sgqhghpRlxrKkruUDYcrhQlYo9kcAnmNI-/exec";
 
 // ─── Offline POST queue ────────────────────────────────────
 const QUEUE_KEY = "sl_queue";
