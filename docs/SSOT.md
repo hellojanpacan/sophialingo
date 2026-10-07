@@ -41,7 +41,7 @@
 These are deliberate product decisions. Do not change them without explicit instruction.
 
 ### 4.1 Leitner Box is the product
-All word progression flows through the Leitner system. Box assignment, intervals, and reset-on-wrong are not implementation details — they are the core mechanic. Never bypass, abstract away, or replace the Leitner logic.
+All word progression flows through the Leitner system. Box assignment, intervals, drop-one-box-on-wrong, and retirement are not implementation details — they are the core mechanic. Never bypass, abstract away, or replace the Leitner logic.
 
 ### 4.2 German UI always
 Every label, button, message, and error text must stay in German. This is not just a preference — the UI language matching Sophia's native language is an intentional immersion choice. Examples: "Prüfen", "Weiter →", "Nächste Runde", "Wörter werden geladen…"
@@ -166,14 +166,26 @@ practiced today (`sessions_today === 0`) — pushes a short Ntfy notification: u
 
 ### Leitner intervals (hardcoded in `Code.js`)
 
-| From box | To box | Interval |
-|----------|--------|----------|
-| 1 | 2 | 1 day |
-| 2 | 3 | 3 days |
-| 3 | 4 | 7 days |
-| 4 | 5 | 14 days |
-| 5 | 5 | 30 days (mastered) |
-| Any | 1 | tomorrow (wrong answer) |
+A word sitting in box N is next due `INTERVALS[N]` days after its last answer.
+
+| Box | Interval |
+|-----|----------|
+| 1 | 1 day |
+| 2 | 3 days |
+| 3 | 7 days |
+| 4 | 14 days |
+| 5 | 30 days |
+| 6 (retired / "Gemeistert") | never — `next_review = 2999-12-31` |
+
+| Answer | Result |
+|--------|--------|
+| Correct (or "almost") in box 1–4 | box + 1, due after the new box's interval |
+| Correct (or "almost") in box 5 | **retired**: box 6, never selected by `getWords` again |
+| Wrong in box 2–5 | box − 1, due after the new box's interval |
+| Wrong in box 1 | stays in box 1, due tomorrow |
+
+Retired words keep their history, still count in stats (shown as "Gemeistert"), and remain in the
+practice-only bonus modes (Lückentext, Nemesis drill), which never touch Leitner state.
 
 ### Word selection algorithm (`getWords` in `Code.js`)
 
@@ -283,6 +295,7 @@ Function `checkAnswer()` in `src/SophiaLingo.jsx`.
 | 3 (teal) | `#E8F5F0` | `#1E7D60` |
 | 4 (blue) | `#E3F0FC` | `#2563A8` |
 | 5 (purple) | `#EDE9FE` | `#6D48C4` |
+| 6 (sage, retired) | `#E9EFE6` | `#4F6B3F` |
 
 ### Colors — answer feedback
 

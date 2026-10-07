@@ -224,6 +224,7 @@ const boxColors = {
   3: { bg: "#E8F5F0", text: "#1E7D60" },
   4: { bg: "#E3F0FC", text: "#2563A8" },
   5: { bg: "#EDE9FE", text: "#6D48C4" },
+  6: { bg: "#E9EFE6", text: "#4F6B3F" }, // retired / gemeistert
 };
 
 // ─── Box badge ─────────────────────────────────────────────
@@ -231,7 +232,7 @@ function BoxBadge({ box }) {
   const c = boxColors[box] || boxColors[1];
   return (
     <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: "12px", fontSize: "12px", fontWeight: 600, backgroundColor: c.bg, color: c.text, letterSpacing: "0.3px" }}>
-      Box {box}
+      {box >= 6 ? "Gemeistert" : `Box ${box}`}
     </span>
   );
 }
@@ -1036,13 +1037,13 @@ export default function SophiaLingo() {
                   <p style={styles.progressSectionTitle}>Leitner-Boxen</p>
                   {(() => {
                     const dist = stats.box_distribution || {};
-                    const max = Math.max(1, ...[1, 2, 3, 4, 5].map((b) => dist[b] || 0));
-                    return [1, 2, 3, 4, 5].map((b) => {
+                    const max = Math.max(1, ...[1, 2, 3, 4, 5, 6].map((b) => dist[b] || 0));
+                    return [1, 2, 3, 4, 5, 6].map((b) => {
                       const count = dist[b] || 0;
                       const c = boxColors[b];
                       return (
                         <div key={b} style={styles.barRow}>
-                          <span style={{ ...styles.barBoxLabel, color: c.text }}>{b}</span>
+                          <span style={{ ...styles.barBoxLabel, color: c.text }}>{b === 6 ? "★" : b}</span>
                           <div style={styles.barTrack}>
                             <div style={{
                               ...styles.barFill,

@@ -6,7 +6,8 @@
 // Spreadsheet ID (update if you recreate the sheet):
 const SHEET_ID = '1t0itr36VJnfjW8-qKa8-pesjXoS_bqkKjtIpvrwmEIM';
 //
-// Leitner box intervals (days)
+// Leitner box intervals (days): a word sitting in box N is next due INTERVALS[N] days
+// after its last answer.
 const LEITNER_INTERVALS = {
   1: 1,
   2: 3,
@@ -14,6 +15,11 @@ const LEITNER_INTERVALS = {
   4: 14,
   5: 30,
 };
+
+// Box 6 = retired ("gemeistert"). A correct answer in box 5 retires the word; it is
+// never selected by getWords again (next_review is pushed to RETIRED_NEXT_REVIEW).
+const RETIRED_BOX = 6;
+const RETIRED_NEXT_REVIEW = '2999-12-31';
 
 // ============================================================
 // Entry points — GET and POST
@@ -175,8 +181,9 @@ function getWords(params) {
 // ============================================================
 // POST { action: "updateWord", word_id: "w_001", correct: true }
 //
-// If correct: leitner_box + 1 (max 5), next_review = today + interval
-// If wrong:   leitner_box = 1, next_review = tomorrow
+// If correct: leitner_box + 1, next_review = today + interval of the new box;
+//             correct in box 5 retires the word (box 6, never due again)
+// If wrong:   leitner_box - 1 (min 1), next_review = today + interval of the new box
 
 function updateWord(body) {
   const wordId = body.word_id;
@@ -216,24 +223,30 @@ function updateWord(body) {
   const today = new Date();
   const todayStr = Utilities.formatDate(today, tz, 'yyyy-MM-dd');
 
+  let nextReviewStr;
+
   if (correct) {
-    newBox = Math.min(currentBox + 1, 5);
-    const interval = LEITNER_INTERVALS[newBox];
-    newNextReview = new Date(today);
-    newNextReview.setDate(newNextReview.getDate() + interval);
+    newBox = Math.min(currentBox + 1, RETIRED_BOX);
+    if (newBox === RETIRED_BOX) {
+      nextReviewStr = RETIRED_NEXT_REVIEW;
+    } else {
+      newNextReview = new Date(today);
+      newNextReview.setDate(newNextReview.getDate() + LEITNER_INTERVALS[newBox]);
+      nextReviewStr = Utilities.formatDate(newNextReview, tz, 'yyyy-MM-dd');
+    }
 
     // Update times_correct
     sheet.getRange(rowIndex + 1, cols['times_correct'] + 1).setValue(timesCorrect + 1);
   } else {
-    newBox = 1;
+    // Drop one box (min 1); a retired word (box 6) can't be answered, but guard anyway.
+    newBox = Math.max(Math.min(currentBox, 5) - 1, 1);
     newNextReview = new Date(today);
-    newNextReview.setDate(newNextReview.getDate() + 1);
+    newNextReview.setDate(newNextReview.getDate() + LEITNER_INTERVALS[newBox]);
+    nextReviewStr = Utilities.formatDate(newNextReview, tz, 'yyyy-MM-dd');
 
     // Update times_wrong
     sheet.getRange(rowIndex + 1, cols['times_wrong'] + 1).setValue(timesWrong + 1);
   }
-
-  const nextReviewStr = Utilities.formatDate(newNextReview, tz, 'yyyy-MM-dd');
 
   // Update leitner_box
   sheet.getRange(rowIndex + 1, cols['leitner_box'] + 1).setValue(newBox);
@@ -511,7 +524,7 @@ function getStats() {
 
   let totalWords = 0;
   let dueToday = 0;
-  const boxCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  const boxCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
   let totalCorrect = 0;
   let totalWrong = 0;
   let reviewedToday = 0;
